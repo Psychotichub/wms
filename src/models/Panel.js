@@ -25,7 +25,7 @@ const Panel = mongoose.model('Panel', PanelSchema);
     if (obsolete) {
       await Panel.collection.dropIndex(obsolete.name);
     }
-  } catch (err) {
+  } catch (_err) {
     // ignore if collection not ready or index missing
   }
 })();

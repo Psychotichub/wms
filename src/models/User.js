@@ -19,7 +19,18 @@ const UserSchema = new mongoose.Schema(
     }],
     // Security settings
     requireDeviceBinding: { type: Boolean, default: false },
-    maxBoundDevices: { type: Number, default: 3 }
+    maxBoundDevices: { type: Number, default: 3 },
+
+    // Refresh token rotation (store hashed jti so tokens can be revoked/rotated)
+    refreshTokens: [
+      {
+        jtiHash: { type: String, required: true },
+        deviceId: { type: String },
+        deviceType: { type: String, enum: ['ios', 'android', 'web'] },
+        createdAt: { type: Date, default: Date.now },
+        expiresAt: { type: Date, required: true }
+      }
+    ]
   },
   { timestamps: true }
 );

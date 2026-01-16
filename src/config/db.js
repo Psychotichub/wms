@@ -9,10 +9,8 @@ const dbConnect = async () => {
 
   try {
     await mongoose.connect(uri);
-    // eslint-disable-next-line no-console
     console.log('MongoDB connected');
   } catch (err) {
-    // eslint-disable-next-line no-console
     console.error('Mongo connection error', err);
     process.exit(1);
   }

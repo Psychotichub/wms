@@ -2,17 +2,61 @@ const express = require('express');
 const router = express.Router();
 const Notification = require('../models/Notification');
 const NotificationPreferences = require('../models/NotificationPreferences');
+const { validate, z } = require('../middleware/validation');
+const { authenticateToken } = require('../middleware/auth');
 
 // Middleware to check if user is authenticated
-const requireAuth = (req, res, next) => {
-  // This should be implemented based on your auth system
-  next();
-};
+const requireAuth = authenticateToken;
+
+const idParamsSchema = z.object({
+  id: z.string().min(1)
+});
+
+const notificationsQuerySchema = z.object({
+  status: z.string().optional(),
+  type: z.string().optional(),
+  limit: z.union([z.number(), z.string()]).optional(),
+  page: z.union([z.number(), z.string()]).optional(),
+  includeExpired: z.union([z.boolean(), z.string()]).optional()
+});
+
+const updatePreferencesSchema = z.record(z.any());
+
+const pushTokenSchema = z.object({
+  pushToken: z.string().min(1)
+});
+
+const webPushSubscriptionSchema = z.object({
+  subscription: z.any()
+});
+
+const sendNotificationSchema = z.object({
+  recipientId: z.string().min(1),
+  title: z.string().min(1),
+  message: z.string().min(1),
+  type: z.string().min(1),
+  priority: z.string().optional(),
+  data: z.any().optional()
+});
+
+const broadcastSchema = z.object({
+  title: z.string().min(1),
+  message: z.string().min(1),
+  type: z.string().min(1),
+  priority: z.string().optional(),
+  data: z.any().optional(),
+  userFilter: z.any().optional()
+});
+
+const statsQuerySchema = z.object({
+  startDate: z.string().optional(),
+  endDate: z.string().optional()
+});
 
 // GET /api/notifications - Get user notifications
-router.get('/', requireAuth, async (req, res) => {
+router.get('/', requireAuth, validate(notificationsQuerySchema, { source: 'query' }), async (req, res) => {
   try {
-    const { status, type, limit = 20, page = 1, includeExpired = false } = req.query;
+    const { status, type, limit = 20, page = 1, includeExpired = false } = req.data;
     const userId = req.user?.id;
 
     if (!userId) {
@@ -66,7 +110,7 @@ router.get('/', requireAuth, async (req, res) => {
 });
 
 // PUT /api/notifications/:id/read - Mark notification as read
-router.put('/:id/read', requireAuth, async (req, res) => {
+router.put('/:id/read', requireAuth, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
   try {
     const userId = req.user?.id;
     const notificationId = req.params.id;
@@ -107,7 +151,7 @@ router.put('/read-all', requireAuth, async (req, res) => {
 });
 
 // DELETE /api/notifications/:id - Archive notification
-router.delete('/:id', requireAuth, async (req, res) => {
+router.delete('/:id', requireAuth, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
   try {
     const userId = req.user?.id;
     const notificationId = req.params.id;
@@ -150,7 +194,7 @@ router.get('/preferences', requireAuth, async (req, res) => {
 });
 
 // PUT /api/notifications/preferences - Update notification preferences
-router.put('/preferences', requireAuth, async (req, res) => {
+router.put('/preferences', requireAuth, validate(updatePreferencesSchema), async (req, res) => {
   try {
     const userId = req.user?.id;
 
@@ -158,7 +202,7 @@ router.put('/preferences', requireAuth, async (req, res) => {
       return res.status(401).json({ error: 'User not authenticated' });
     }
 
-    const updateData = req.body;
+    const updateData = req.data;
     delete updateData.user; // Prevent user field from being updated
     delete updateData.createdAt; // Prevent timestamps from being updated
     delete updateData.updatedAt;
@@ -185,10 +229,10 @@ router.put('/preferences', requireAuth, async (req, res) => {
 });
 
 // POST /api/notifications/preferences/push-token - Update push token
-router.post('/preferences/push-token', requireAuth, async (req, res) => {
+router.post('/preferences/push-token', requireAuth, validate(pushTokenSchema), async (req, res) => {
   try {
     const userId = req.user?.id;
-    const { pushToken } = req.body;
+    const { pushToken } = req.data;
 
     if (!userId) {
       return res.status(401).json({ error: 'User not authenticated' });
@@ -208,12 +252,36 @@ router.post('/preferences/push-token', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/notifications/preferences/web-push-subscription - Update web push subscription (web only)
+router.post('/preferences/web-push-subscription', requireAuth, validate(webPushSubscriptionSchema), async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const { subscription } = req.data;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    if (!subscription) {
+      return res.status(400).json({ error: 'Subscription is required' });
+    }
+
+    const preferences = await NotificationPreferences.getOrCreateForUser(userId);
+    await preferences.updateWebPushSubscription(subscription);
+
+    return res.json({ message: 'Web push subscription updated successfully' });
+  } catch (error) {
+    console.error('Error updating web push subscription:', error);
+    return res.status(500).json({ error: 'Failed to update web push subscription' });
+  }
+});
+
 // POST /api/notifications/send - Send notification (admin/system only)
-router.post('/send', requireAuth, async (req, res) => {
+router.post('/send', requireAuth, validate(sendNotificationSchema), async (req, res) => {
   try {
     // This should check if user is admin
     const senderId = req.user?.id;
-    const { recipientId, title, message, type, priority, data } = req.body;
+    const { recipientId, title, message, type, priority, data } = req.data;
 
     if (!recipientId || !title || !message || !type) {
       return res.status(400).json({
@@ -253,11 +321,11 @@ router.post('/send', requireAuth, async (req, res) => {
 });
 
 // POST /api/notifications/broadcast - Send broadcast notification to all users
-router.post('/broadcast', requireAuth, async (req, res) => {
+router.post('/broadcast', requireAuth, validate(broadcastSchema), async (req, res) => {
   try {
     // This should check if user is admin
     const senderId = req.user?.id;
-    const { title, message, type, priority, data, userFilter } = req.body;
+    const { title, message, type, priority, data, userFilter } = req.data;
 
     if (!title || !message || !type) {
       return res.status(400).json({
@@ -309,10 +377,10 @@ router.post('/broadcast', requireAuth, async (req, res) => {
 });
 
 // GET /api/notifications/stats - Get notification statistics (admin only)
-router.get('/stats', requireAuth, async (req, res) => {
+router.get('/stats', requireAuth, validate(statsQuerySchema, { source: 'query' }), async (req, res) => {
   try {
     // This should check if user is admin
-    const { startDate, endDate } = req.query;
+    const { startDate, endDate } = req.data;
 
     const dateFilter = {};
     if (startDate && endDate) {

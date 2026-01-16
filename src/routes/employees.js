@@ -5,9 +5,60 @@ const Attendance = require('../models/Attendance');
 const Location = require('../models/Location');
 const { validateDeviceBinding } = require('./devices');
 const { authenticateToken } = require('../middleware/auth');
+const { validate, z } = require('../middleware/validation');
 
 // Use shared JWT auth middleware
 const requireAuth = authenticateToken;
+
+const idParamsSchema = z.object({
+  id: z.string().min(1)
+});
+
+const employeeCreateSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().email(),
+  phone: z.string().optional(),
+  role: z.string().optional(),
+  department: z.string().optional(),
+  skills: z.array(z.any()).optional(),
+  hourlyRate: z.union([z.number(), z.string()]).optional(),
+  manager: z.string().optional(),
+  address: z.any().optional(),
+  emergencyContact: z.any().optional()
+});
+
+const employeeUpdateSchema = z.object({
+  name: z.string().min(1).optional(),
+  email: z.string().email().optional(),
+  phone: z.string().optional(),
+  role: z.string().optional(),
+  department: z.string().optional(),
+  skills: z.array(z.any()).optional(),
+  hourlyRate: z.union([z.number(), z.string()]).optional(),
+  isActive: z.union([z.boolean(), z.string()]).optional(),
+  manager: z.string().optional(),
+  address: z.any().optional(),
+  emergencyContact: z.any().optional()
+});
+
+const geofenceCheckInSchema = z.object({
+  locationId: z.string().optional(),
+  locationName: z.string().optional(),
+  latitude: z.union([z.number(), z.string()]),
+  longitude: z.union([z.number(), z.string()]),
+  accuracy: z.union([z.number(), z.string()]).optional(),
+  timestamp: z.string().optional(),
+  notes: z.string().optional(),
+  deviceInfo: z.any().optional()
+});
+
+const geofenceCheckOutSchema = z.object({
+  locationId: z.string().optional(),
+  latitude: z.union([z.number(), z.string()]).optional(),
+  longitude: z.union([z.number(), z.string()]).optional(),
+  accuracy: z.union([z.number(), z.string()]).optional(),
+  timestamp: z.string().optional()
+});
 
 // Middleware to check if user has admin/manager permissions
 const requireManager = (req, res, next) => {
@@ -120,20 +171,9 @@ router.get('/:id', requireAuth, async (req, res) => {
 });
 
 // POST /api/employees - Create new employee
-router.post('/', requireAuth, requireManager, async (req, res) => {
+router.post('/', requireAuth, requireManager, validate(employeeCreateSchema), async (req, res) => {
   try {
-    const {
-      name,
-      email,
-      phone,
-      role,
-      department,
-      skills,
-      hourlyRate,
-      manager,
-      address,
-      emergencyContact
-    } = req.body;
+    const { name, email, phone, role, department, skills, hourlyRate, manager, address, emergencyContact } = req.data;
 
     // Check if email already exists
     const existingEmployee = await Employee.findOne({ email: email.toLowerCase() });
@@ -173,21 +213,15 @@ router.post('/', requireAuth, requireManager, async (req, res) => {
 });
 
 // PUT /api/employees/:id - Update employee
-router.put('/:id', requireAuth, requireManager, async (req, res) => {
+router.put(
+  '/:id',
+  requireAuth,
+  requireManager,
+  validate(idParamsSchema, { source: 'params' }),
+  validate(employeeUpdateSchema),
+  async (req, res) => {
   try {
-    const {
-      name,
-      email,
-      phone,
-      role,
-      department,
-      skills,
-      hourlyRate,
-      isActive,
-      manager,
-      address,
-      emergencyContact
-    } = req.body;
+    const { name, email, phone, role, department, skills, hourlyRate, isActive, manager, address, emergencyContact } = req.data;
 
     const employee = await Employee.findById(req.params.id);
     if (!employee) {
@@ -373,18 +407,9 @@ router.get('/:id/attendance', requireAuth, async (req, res) => {
 });
 
 // POST /api/employees/attendance/checkin - Geofence-based check-in
-router.post('/attendance/checkin', requireAuth, async (req, res) => {
+router.post('/attendance/checkin', requireAuth, validate(geofenceCheckInSchema), async (req, res) => {
   try {
-    const {
-      locationId,
-      locationName,
-      latitude,
-      longitude,
-      accuracy,
-      timestamp,
-      notes,
-      deviceInfo
-    } = req.body;
+    const { locationId, locationName, latitude, longitude, accuracy, timestamp, notes, deviceInfo } = req.data;
 
     // Validate required fields
     if (!latitude || !longitude) {
@@ -505,21 +530,21 @@ router.post('/attendance/checkin', requireAuth, async (req, res) => {
 });
 
 // POST /api/employees/attendance/checkout - Geofence-based check-out
-router.post('/attendance/checkout', requireAuth, async (req, res) => {
+router.post('/attendance/checkout', requireAuth, validate(geofenceCheckOutSchema), async (req, res) => {
   try {
     const {
       locationId,
       latitude,
       longitude,
       accuracy,
-      timestamp
-    } = req.body;
+      timestamp: _timestamp
+    } = req.data;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const userId = req.user.id || req.user.userId;
-    const orgId = req.user.organizationId || req.user.company || req.user.site;
+    const _orgId = req.user.organizationId || req.user.company || req.user.site;
 
     const attendance = await Attendance.findOne({
       employee: userId,

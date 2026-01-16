@@ -3,8 +3,39 @@ const DailyReport = require('../models/DailyReport');
 const Panel = require('../models/Panel');
 const Material = require('../models/Material');
 const { authenticateToken } = require('../middleware/auth');
+const { validate, z } = require('../middleware/validation');
 
 const router = express.Router();
+
+const idParamsSchema = z.object({
+  id: z.string().min(1)
+});
+
+const dailyCreateSchema = z.object({
+  date: z.string().optional(),
+  summary: z.string().optional(),
+  tasks: z.any().optional(),
+  status: z.any().optional(),
+  materialId: z.string().min(1),
+  quantity: z.union([z.number(), z.string()]).optional(),
+  location: z.string().optional(),
+  panel: z.string().optional(),
+  circuit: z.string().optional(),
+  notes: z.string().optional()
+});
+
+const dailyUpdateSchema = z.object({
+  date: z.string().optional(),
+  summary: z.string().optional(),
+  tasks: z.any().optional(),
+  status: z.any().optional(),
+  materialId: z.string().min(1).optional(),
+  quantity: z.union([z.number(), z.string()]).optional(),
+  location: z.string().optional(),
+  panel: z.string().optional(),
+  circuit: z.string().optional(),
+  notes: z.string().optional()
+});
 
 router.get('/daily', authenticateToken, async (req, res, next) => {
   try {
@@ -19,9 +50,9 @@ router.get('/daily', authenticateToken, async (req, res, next) => {
   }
 });
 
-router.post('/daily', authenticateToken, async (req, res, next) => {
+router.post('/daily', authenticateToken, validate(dailyCreateSchema), async (req, res, next) => {
   try {
-    const { date, summary, tasks, status, materialId, quantity, location, panel, circuit, notes } = req.body;
+    const { date, summary, tasks, status, materialId, quantity, location, panel, circuit, notes } = req.data;
 
     const material = await Material.findOne({ _id: materialId, company: req.user.company, site: req.user.site });
     if (!material) {
@@ -62,9 +93,14 @@ router.post('/daily', authenticateToken, async (req, res, next) => {
   }
 });
 
-router.put('/daily/:id', authenticateToken, async (req, res, next) => {
+router.put(
+  '/daily/:id',
+  authenticateToken,
+  validate(idParamsSchema, { source: 'params' }),
+  validate(dailyUpdateSchema),
+  async (req, res, next) => {
   try {
-    const updates = req.body;
+    const updates = req.data;
 
     if (updates.materialId) {
       const material = await Material.findOne({
@@ -105,7 +141,7 @@ router.put('/daily/:id', authenticateToken, async (req, res, next) => {
   }
 });
 
-router.delete('/daily/:id', authenticateToken, async (req, res, next) => {
+router.delete('/daily/:id', authenticateToken, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
   try {
     const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
     const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };

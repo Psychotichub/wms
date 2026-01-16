@@ -2,6 +2,21 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const { authenticateToken } = require('../middleware/auth');
+const { validate, z } = require('../middleware/validation');
+
+const deviceIdParamsSchema = z.object({
+  deviceId: z.string().min(1)
+});
+
+const bindDeviceSchema = z.object({
+  deviceId: z.string().min(1),
+  deviceName: z.string().optional(),
+  deviceType: z.enum(['ios', 'android', 'web'])
+});
+
+const updateDeviceSchema = z.object({
+  deviceName: z.string().optional()
+});
 
 // Get user's bound devices
 router.get('/', authenticateToken, async (req, res) => {
@@ -25,9 +40,9 @@ router.get('/', authenticateToken, async (req, res) => {
 });
 
 // Bind a new device
-router.post('/bind', authenticateToken, async (req, res) => {
+router.post('/bind', authenticateToken, validate(bindDeviceSchema), async (req, res) => {
   try {
-    const { deviceId, deviceName, deviceType } = req.body;
+    const { deviceId, deviceName, deviceType } = req.data;
 
     if (!deviceId || !deviceType) {
       return res.status(400).json({
@@ -90,7 +105,11 @@ router.post('/bind', authenticateToken, async (req, res) => {
 });
 
 // Unbind a device
-router.post('/unbind/:deviceId', authenticateToken, async (req, res) => {
+router.post(
+  '/unbind/:deviceId',
+  authenticateToken,
+  validate(deviceIdParamsSchema, { source: 'params' }),
+  async (req, res) => {
   try {
     const user = await User.findById(req.user.userId);
 
@@ -119,9 +138,14 @@ router.post('/unbind/:deviceId', authenticateToken, async (req, res) => {
 });
 
 // Update device name
-router.put('/:deviceId', authenticateToken, async (req, res) => {
+router.put(
+  '/:deviceId',
+  authenticateToken,
+  validate(deviceIdParamsSchema, { source: 'params' }),
+  validate(updateDeviceSchema),
+  async (req, res) => {
   try {
-    const { deviceName } = req.body;
+    const { deviceName } = req.data;
 
     const user = await User.findById(req.user.userId);
 
@@ -151,7 +175,7 @@ router.put('/:deviceId', authenticateToken, async (req, res) => {
 });
 
 // Validate device binding (middleware helper)
-const validateDeviceBinding = async (userId, deviceId, deviceType) => {
+const validateDeviceBinding = async (userId, deviceId, _deviceType) => {
   try {
     const user = await User.findById(userId);
 

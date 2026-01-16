@@ -3,6 +3,38 @@ const router = express.Router();
 const Location = require('../models/Location');
 const Attendance = require('../models/Attendance');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { validate, z } = require('../middleware/validation');
+
+const idParamsSchema = z.object({
+  id: z.string().min(1)
+});
+
+const lonLatSchema = z.tuple([z.number(), z.number()]);
+
+const locationCreateSchema = z.object({
+  name: z.string().min(1),
+  address: z.string().optional(),
+  coordinates: z.array(lonLatSchema).optional(),
+  type: z.enum(['polygon', 'circle']).optional(),
+  radius: z.union([z.number(), z.string()]).optional(),
+  center: lonLatSchema.optional()
+});
+
+const locationUpdateSchema = z.object({
+  name: z.string().min(1).optional(),
+  address: z.string().optional(),
+  coordinates: z.array(lonLatSchema).optional(),
+  type: z.enum(['polygon', 'circle']).optional(),
+  radius: z.union([z.number(), z.string()]).optional(),
+  center: lonLatSchema.optional(),
+  isActive: z.union([z.boolean(), z.string()]).optional()
+});
+
+const attendanceHistoryQuerySchema = z.object({
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  locationId: z.string().optional()
+});
 
 // Get all geofences for the organization
 router.get('/geofences', authenticateToken, async (req, res) => {
@@ -32,9 +64,9 @@ router.get('/geofences', authenticateToken, async (req, res) => {
 });
 
 // Create a new location/geofence (Admin only)
-router.post('/', authenticateToken, requireAdmin, async (req, res) => {
+router.post('/', authenticateToken, requireAdmin, validate(locationCreateSchema), async (req, res) => {
   try {
-    const { name, address, coordinates, type = 'polygon', radius, center } = req.body;
+    const { name, address, coordinates, type = 'polygon', radius, center } = req.data;
     const orgId = req.user.organizationId || req.user.company || req.user.site;
     const createdBy = req.user.id;
 
@@ -136,9 +168,15 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
 });
 
 // Update a location (Admin only)
-router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
+router.put(
+  '/:id',
+  authenticateToken,
+  requireAdmin,
+  validate(idParamsSchema, { source: 'params' }),
+  validate(locationUpdateSchema),
+  async (req, res) => {
   try {
-    const { name, address, coordinates, type, radius, center, isActive } = req.body;
+    const { name, address, coordinates, type, radius, center, isActive } = req.data;
 
     const orgId = req.user.organizationId || req.user.company || req.user.site;
     const coordsToSave = type === 'circle' ? [] : coordinates;
@@ -182,7 +220,7 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
 });
 
 // Delete a location (Admin only)
-router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
+router.delete('/:id', authenticateToken, requireAdmin, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
   try {
     const location = await Location.findOneAndUpdate(
       { _id: req.params.id, organizationId: req.user.organizationId },
@@ -205,9 +243,9 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
 });
 
 // Get attendance history for current user with location info
-router.get('/attendance/history', authenticateToken, async (req, res) => {
+router.get('/attendance/history', authenticateToken, validate(attendanceHistoryQuerySchema, { source: 'query' }), async (req, res) => {
   try {
-    const { startDate, endDate, locationId } = req.query;
+    const { startDate, endDate, locationId } = req.data;
 
     let query = {
       employee: req.user.userId

@@ -1,8 +1,23 @@
 const express = require('express');
 const Panel = require('../models/Panel');
 const { authenticateToken } = require('../middleware/auth');
+const { validate, z } = require('../middleware/validation');
 
 const router = express.Router();
+
+const idParamsSchema = z.object({
+  id: z.string().min(1)
+});
+
+const panelCreateSchema = z.object({
+  name: z.string().min(1),
+  circuit: z.string().min(1)
+});
+
+const panelUpdateSchema = z.object({
+  name: z.string().min(1).optional(),
+  circuit: z.string().min(1).optional()
+});
 
 router.get('/', authenticateToken, async (req, res, next) => {
   try {
@@ -15,9 +30,9 @@ router.get('/', authenticateToken, async (req, res, next) => {
   }
 });
 
-router.post('/', authenticateToken, async (req, res, next) => {
+router.post('/', authenticateToken, validate(panelCreateSchema), async (req, res, next) => {
   try {
-    const { name, circuit } = req.body;
+    const { name, circuit } = req.data;
     const existing = await Panel.findOne({
       name,
       circuit,
@@ -46,9 +61,14 @@ router.post('/', authenticateToken, async (req, res, next) => {
   }
 });
 
-router.put('/:id', authenticateToken, async (req, res, next) => {
+router.put(
+  '/:id',
+  authenticateToken,
+  validate(idParamsSchema, { source: 'params' }),
+  validate(panelUpdateSchema),
+  async (req, res, next) => {
   try {
-    const { name, circuit } = req.body;
+    const { name, circuit } = req.data;
     const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
     const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
     const current = await Panel.findOne(filter);
@@ -82,7 +102,7 @@ router.put('/:id', authenticateToken, async (req, res, next) => {
   }
 });
 
-router.delete('/:id', authenticateToken, async (req, res, next) => {
+router.delete('/:id', authenticateToken, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
   try {
     const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
     const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };

@@ -1,8 +1,25 @@
 const express = require('express');
 const User = require('../models/User');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { validate, z } = require('../middleware/validation');
 
 const router = express.Router();
+
+const idParamsSchema = z.object({
+  id: z.string().min(1)
+});
+
+const userCreateSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().email(),
+  password: z.string().min(1),
+  role: z.string().optional(),
+  company: z.string().optional()
+});
+
+const passwordUpdateSchema = z.object({
+  password: z.string().min(1)
+});
 
 router.get('/', authenticateToken, requireAdmin, async (req, res, next) => {
   try {
@@ -13,10 +30,15 @@ router.get('/', authenticateToken, requireAdmin, async (req, res, next) => {
   }
 });
 
-router.put('/:id/password', authenticateToken, requireAdmin, async (req, res, next) => {
+router.put(
+  '/:id/password',
+  authenticateToken,
+  requireAdmin,
+  validate(idParamsSchema, { source: 'params' }),
+  validate(passwordUpdateSchema),
+  async (req, res, next) => {
   try {
-    const { password } = req.body;
-    if (!password) return res.status(400).json({ message: 'Password is required' });
+    const { password } = req.data;
 
     const user = await User.findOne({ _id: req.params.id, company: req.user.company });
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -30,7 +52,7 @@ router.put('/:id/password', authenticateToken, requireAdmin, async (req, res, ne
   }
 });
 
-router.delete('/:id', authenticateToken, requireAdmin, async (req, res, next) => {
+router.delete('/:id', authenticateToken, requireAdmin, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
   try {
     const user = await User.findOneAndDelete({ _id: req.params.id, company: req.user.company });
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -40,9 +62,9 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res, next) =>
   }
 });
 
-router.post('/', authenticateToken, requireAdmin, async (req, res, next) => {
+router.post('/', authenticateToken, requireAdmin, validate(userCreateSchema), async (req, res, next) => {
   try {
-    const { name, email, password, role, company } = req.body;
+    const { name, email, password, role, company } = req.data;
     const site = req.user.site; // site locked to admin's site
 
     const chosenCompany = company || req.user.company;

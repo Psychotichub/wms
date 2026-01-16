@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+const { sendExpoPushNotification } = require('../utils/expoPush');
+const { sendWebPushNotification } = require('../utils/webPush');
 
 const notificationSchema = new mongoose.Schema({
   recipient: {
@@ -59,8 +61,14 @@ const notificationSchema = new mongoose.Schema({
   pushToken: {
     type: String // Expo push token for delivery
   },
+  webPushSubscription: {
+    type: mongoose.Schema.Types.Mixed
+  },
   pushResponse: {
     type: mongoose.Schema.Types.Mixed // Response from push service
+  },
+  webPushResponse: {
+    type: mongoose.Schema.Types.Mixed
   },
   scheduledFor: {
     type: Date // For scheduled notifications
@@ -120,7 +128,7 @@ notificationSchema.statics.createAndSend = async function(notificationData) {
   // If push token is available, send push notification
   if (notification.pushToken) {
     try {
-      const pushResponse = await sendPushNotification({
+      const tickets = await sendExpoPushNotification({
         to: notification.pushToken,
         title: notification.title,
         body: notification.message,
@@ -130,9 +138,30 @@ notificationSchema.statics.createAndSend = async function(notificationData) {
           ...notification.data
         }
       });
-      await notification.markAsDelivered(pushResponse);
+      await notification.markAsDelivered(tickets);
     } catch (error) {
       console.error('Failed to send push notification:', error);
+    }
+  }
+
+  // If web push subscription is available, send web push notification
+  if (notification.webPushSubscription) {
+    try {
+      const payload = JSON.stringify({
+        notificationId: String(notification._id),
+        title: notification.title,
+        message: notification.message,
+        type: notification.type,
+        data: notification.data || {},
+      });
+      const resp = await sendWebPushNotification({
+        subscription: notification.webPushSubscription,
+        payload,
+      });
+      notification.webPushResponse = resp;
+      await notification.save();
+    } catch (error) {
+      console.error('Failed to send web push notification:', error);
     }
   }
 
@@ -173,14 +202,3 @@ notificationSchema.statics.cleanupOldNotifications = function(daysOld = 30) {
 };
 
 module.exports = mongoose.model('Notification', notificationSchema);
-
-// Helper function for sending push notifications (would be implemented with Expo server SDK)
-async function sendPushNotification({ to, title, body, data }) {
-  // This would integrate with Expo's push notification service
-  // For now, return a mock response
-  return {
-    status: 'ok',
-    id: 'mock-notification-id',
-    details: { expoPushToken: to }
-  };
-}

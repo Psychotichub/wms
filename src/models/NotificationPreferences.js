@@ -52,6 +52,9 @@ const notificationPreferencesSchema = new mongoose.Schema({
     type: String,
     sparse: true // Allow null values but ensure uniqueness
   },
+  webPushSubscription: {
+    type: mongoose.Schema.Types.Mixed
+  },
   lastUpdated: {
     type: Date,
     default: Date.now
@@ -93,6 +96,13 @@ notificationPreferencesSchema.methods.updatePushToken = function(token) {
   return this.save();
 };
 
+// Method to update web push subscription
+notificationPreferencesSchema.methods.updateWebPushSubscription = function(subscription) {
+  this.webPushSubscription = subscription;
+  this.lastUpdated = new Date();
+  return this.save();
+};
+
 // Static method to get or create preferences for user
 notificationPreferencesSchema.statics.getOrCreateForUser = async function(userId) {
   let preferences = await this.findOne({ user: userId });
@@ -125,6 +135,10 @@ notificationPreferencesSchema.statics.sendNotificationIfAllowed = async function
     // Add push token if available
     if (preferences.pushToken) {
       notificationData.pushToken = preferences.pushToken;
+    }
+    // Add web push subscription if available
+    if (preferences.webPushSubscription) {
+      notificationData.webPushSubscription = preferences.webPushSubscription;
     }
 
     return await mongoose.model('Notification').createAndSend(notificationData);

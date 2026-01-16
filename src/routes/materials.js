@@ -1,8 +1,32 @@
 const express = require('express');
 const Material = require('../models/Material');
 const { authenticateToken } = require('../middleware/auth');
+const { validate, z } = require('../middleware/validation');
 
 const router = express.Router();
+
+const idParamsSchema = z.object({
+  id: z.string().min(1)
+});
+
+const materialCreateSchema = z.object({
+  name: z.string().min(1),
+  quantity: z.union([z.number(), z.string()]).optional(),
+  unit: z.string().optional(),
+  materialPrice: z.union([z.number(), z.string()]).optional(),
+  labourPrice: z.union([z.number(), z.string()]).optional(),
+  price: z.union([z.number(), z.string()]).optional(),
+  location: z.string().optional(),
+  panel: z.string().optional(),
+  circuit: z.string().optional(),
+  receivedAt: z.any().optional()
+});
+
+const materialUpdateSchema = materialCreateSchema.partial();
+
+const materialPriceSchema = z.object({
+  price: z.union([z.number(), z.string()])
+});
 
 router.get('/', authenticateToken, async (req, res, next) => {
   try {
@@ -15,9 +39,9 @@ router.get('/', authenticateToken, async (req, res, next) => {
   }
 });
 
-router.post('/', authenticateToken, async (req, res, next) => {
+router.post('/', authenticateToken, validate(materialCreateSchema), async (req, res, next) => {
   try {
-    const { name, quantity = 0, unit, materialPrice = 0, labourPrice = 0, price, location, panel, circuit, receivedAt } = req.body;
+    const { name, quantity = 0, unit, materialPrice = 0, labourPrice = 0, price, location, panel, circuit, receivedAt } = req.data;
     const existing = await Material.findOne({
       name,
       company: req.user.company,
@@ -52,9 +76,14 @@ router.post('/', authenticateToken, async (req, res, next) => {
   }
 });
 
-router.put('/:id', authenticateToken, async (req, res, next) => {
+router.put(
+  '/:id',
+  authenticateToken,
+  validate(idParamsSchema, { source: 'params' }),
+  validate(materialUpdateSchema),
+  async (req, res, next) => {
   try {
-    const { name, quantity, unit, materialPrice, labourPrice, price, location, panel, circuit, receivedAt } = req.body;
+    const { name, quantity, unit, materialPrice, labourPrice, price, location, panel, circuit, receivedAt } = req.data;
     const updates = {
       ...(name !== undefined && { name }),
       ...(quantity !== undefined && { quantity }),
@@ -99,9 +128,14 @@ router.put('/:id', authenticateToken, async (req, res, next) => {
   }
 });
 
-router.put('/:id/price', authenticateToken, async (req, res, next) => {
+router.put(
+  '/:id/price',
+  authenticateToken,
+  validate(idParamsSchema, { source: 'params' }),
+  validate(materialPriceSchema),
+  async (req, res, next) => {
   try {
-    const { price } = req.body;
+    const { price } = req.data;
     const filter = req.user.role === 'admin' ? { _id: req.params.id } : { _id: req.params.id, createdBy: req.user.id };
     const material = await Material.findOneAndUpdate(filter, { price }, { new: true });
     if (!material) {
@@ -113,7 +147,7 @@ router.put('/:id/price', authenticateToken, async (req, res, next) => {
   }
 });
 
-router.delete('/:id', authenticateToken, async (req, res, next) => {
+router.delete('/:id', authenticateToken, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
   try {
     const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
     const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };

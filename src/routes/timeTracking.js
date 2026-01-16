@@ -1,11 +1,82 @@
 const express = require('express');
 const router = express.Router();
 const TimeEntry = require('../models/TimeEntry');
-const Employee = require('../models/Employee');
+const Attendance = require('../models/Attendance');
 const { authenticateToken } = require('../middleware/auth');
+const { validate, z } = require('../middleware/validation');
 
 // Use shared JWT auth middleware
 const requireAuth = authenticateToken;
+
+const idParamsSchema = z.object({
+  id: z.string().min(1)
+});
+
+const startSchema = z.object({
+  taskId: z.string().optional(),
+  taskType: z.string().optional(),
+  description: z.string().optional(),
+  category: z.string().optional(),
+  tags: z.array(z.any()).optional(),
+  isBillable: z.union([z.boolean(), z.string()]).optional(),
+  location: z.any().optional()
+});
+
+const stopSchema = z.object({
+  notes: z.string().optional(),
+  location: z.any().optional()
+});
+
+const manualSchema = z.object({
+  taskId: z.string().optional(),
+  taskType: z.string().optional(),
+  description: z.string().min(1),
+  startTime: z.string().min(1),
+  endTime: z.string().min(1),
+  category: z.string().optional(),
+  tags: z.array(z.any()).optional(),
+  isBillable: z.union([z.boolean(), z.string()]).optional(),
+  notes: z.string().optional()
+});
+
+const approveSchema = z.object({
+  notes: z.string().optional()
+});
+
+const rejectSchema = z.object({
+  reason: z.string().min(1)
+});
+
+const getTodayStart = () => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today;
+};
+
+const requireCheckedIn = async (req, res, next) => {
+  try {
+    const employeeId = req.user?.id || req.user?.userId;
+    if (!employeeId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    const today = getTodayStart();
+    const activeAttendance = await Attendance.findOne({
+      employee: employeeId,
+      status: 'active',
+      date: today
+    });
+
+    if (!activeAttendance) {
+      return res.status(403).json({ error: 'Check in required to start work' });
+    }
+
+    return next();
+  } catch (error) {
+    console.error('Error validating attendance for time tracking:', error);
+    return res.status(500).json({ error: 'Failed to validate attendance' });
+  }
+};
 
 // Middleware to check if user can access employee's time data
 const canAccessEmployeeTime = (req, res, next) => {
@@ -28,9 +99,9 @@ const canAccessEmployeeTime = (req, res, next) => {
 };
 
 // POST /api/time/start - Start time tracking
-router.post('/start', requireAuth, async (req, res) => {
+router.post('/start', requireAuth, requireCheckedIn, validate(startSchema), async (req, res) => {
   try {
-    const { taskId, taskType, description, category, tags, isBillable, location } = req.body;
+    const { taskId, taskType, description, category, tags, isBillable, location } = req.data;
     const employeeId = req.user?.id || req.user?.userId;
 
     if (!employeeId) {
@@ -76,9 +147,9 @@ router.post('/start', requireAuth, async (req, res) => {
 });
 
 // POST /api/time/stop - Stop active time tracking
-router.post('/stop', requireAuth, async (req, res) => {
+router.post('/stop', requireAuth, validate(stopSchema), async (req, res) => {
   try {
-    const { notes, location } = req.body;
+    const { notes, location } = req.data;
     const employeeId = req.user?.id || req.user?.userId;
 
     if (!employeeId) {
@@ -147,19 +218,9 @@ router.get('/active', requireAuth, async (req, res) => {
 });
 
 // POST /api/time/manual - Create manual time entry
-router.post('/manual', requireAuth, async (req, res) => {
+router.post('/manual', requireAuth, requireCheckedIn, validate(manualSchema), async (req, res) => {
   try {
-    const {
-      taskId,
-      taskType,
-      description,
-      startTime,
-      endTime,
-      category,
-      tags,
-      isBillable,
-      notes
-    } = req.body;
+    const { taskId, taskType, description, startTime, endTime, category, tags, isBillable, notes } = req.data;
     const employeeId = req.user?.id;
 
     if (!employeeId) {
@@ -285,9 +346,14 @@ router.get('/entries', requireAuth, canAccessEmployeeTime, async (req, res) => {
 });
 
 // PUT /api/time/entries/:id/approve - Approve time entry
-router.put('/entries/:id/approve', requireAuth, async (req, res) => {
+router.put(
+  '/entries/:id/approve',
+  requireAuth,
+  validate(idParamsSchema, { source: 'params' }),
+  validate(approveSchema),
+  async (req, res) => {
   try {
-    const { notes } = req.body;
+    const { notes } = req.data;
     const approverId = req.user?.id;
 
     const timeEntry = await TimeEntry.findById(req.params.id);
@@ -319,9 +385,14 @@ router.put('/entries/:id/approve', requireAuth, async (req, res) => {
 });
 
 // PUT /api/time/entries/:id/reject - Reject time entry
-router.put('/entries/:id/reject', requireAuth, async (req, res) => {
+router.put(
+  '/entries/:id/reject',
+  requireAuth,
+  validate(idParamsSchema, { source: 'params' }),
+  validate(rejectSchema),
+  async (req, res) => {
   try {
-    const { reason } = req.body;
+    const { reason } = req.data;
     const approverId = req.user?.id;
 
     const timeEntry = await TimeEntry.findById(req.params.id);

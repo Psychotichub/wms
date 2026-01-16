@@ -2,8 +2,22 @@ const express = require('express');
 const Received = require('../models/Received');
 const Material = require('../models/Material');
 const { authenticateToken } = require('../middleware/auth');
+const { validate, z } = require('../middleware/validation');
 
 const router = express.Router();
+
+const idParamsSchema = z.object({
+  id: z.string().min(1)
+});
+
+const receivedCreateSchema = z.object({
+  materialName: z.string().min(1),
+  quantity: z.union([z.number(), z.string()]),
+  notes: z.string().optional(),
+  date: z.any().optional()
+});
+
+const receivedUpdateSchema = receivedCreateSchema.partial();
 
 // Get all received records for the company/site
 router.get('/', authenticateToken, async (req, res, next) => {
@@ -17,9 +31,9 @@ router.get('/', authenticateToken, async (req, res, next) => {
 });
 
 // Create a new received record
-router.post('/', authenticateToken, async (req, res, next) => {
+router.post('/', authenticateToken, validate(receivedCreateSchema), async (req, res, next) => {
   try {
-    const { materialName, quantity, notes, date } = req.body;
+    const { materialName, quantity, notes, date } = req.data;
 
     // Validate material exists
     const material = await Material.findOne({
@@ -52,9 +66,14 @@ router.post('/', authenticateToken, async (req, res, next) => {
 });
 
 // Update a record
-router.put('/:id', authenticateToken, async (req, res, next) => {
+router.put(
+  '/:id',
+  authenticateToken,
+  validate(idParamsSchema, { source: 'params' }),
+  validate(receivedUpdateSchema),
+  async (req, res, next) => {
   try {
-    const { materialName, quantity, notes, date } = req.body;
+    const { materialName, quantity, notes, date } = req.data;
     const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
     const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
 
@@ -87,7 +106,7 @@ router.put('/:id', authenticateToken, async (req, res, next) => {
 });
 
 // Delete a record
-router.delete('/:id', authenticateToken, async (req, res, next) => {
+router.delete('/:id', authenticateToken, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
   try {
     const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
     const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
