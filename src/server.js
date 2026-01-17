@@ -12,14 +12,14 @@ const dbConnect = require('./config/db');
 // 2) If `.env.<appEnv>` exists, load it (development only) to override.
 dotenv.config();
 
-const appEnv = (process.env.APP_ENV || process.env.NODE_ENV || 'development').toLowerCase();
+const appEnv = (process.env.APP_ENV || 'development').toLowerCase();
 const envFile = path.resolve(process.cwd(), `.env.${appEnv}`);
 if (appEnv !== 'production' && fs.existsSync(envFile)) {
   dotenv.config({ path: envFile, override: true });
 }
 
 // Resolve env-specific vars (allows using *_DEV / *_PROD in addition to plain vars)
-const isProdEnv = appEnv === 'production';
+const isProdEnv = appEnv === 'production' || appEnv === 'prod';
 process.env.MONGO_URI =
   process.env.MONGO_URI ||
   (isProdEnv ? process.env.MONGO_URI_PROD : process.env.MONGO_URI_DEV) ||

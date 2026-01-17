@@ -46,5 +46,27 @@ UserSchema.methods.comparePassword = function comparePassword(candidate) {
   return bcrypt.compare(candidate, this.password);
 };
 
-module.exports = mongoose.model('User', UserSchema);
+const User = mongoose.model('User', UserSchema);
+
+// Drop old phoneNumber index if it exists (from previous schema version)
+// This prevents E11000 duplicate key errors when multiple users have null phoneNumber
+(async () => {
+  try {
+    const indexes = await User.collection.indexes();
+    const phoneNumberIndex = indexes.find(
+      (idx) => idx.key && idx.key.phoneNumber === 1
+    );
+    if (phoneNumberIndex) {
+      await User.collection.dropIndex(phoneNumberIndex.name);
+      console.log('Dropped obsolete phoneNumber index from users collection');
+    }
+  } catch (err) {
+    // Ignore if collection not ready, index missing, or already dropped
+    if (err.code !== 27 && err.code !== 85) {
+      console.warn('Could not drop phoneNumber index:', err.message);
+    }
+  }
+})();
+
+module.exports = User;
 

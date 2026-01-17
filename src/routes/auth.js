@@ -1,6 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const { authenticateToken } = require('../middleware/auth');
 
@@ -41,6 +42,7 @@ const ACCESS_TOKEN_TTL = process.env.ACCESS_TOKEN_TTL || '15m';
 const REFRESH_TOKEN_TTL = process.env.REFRESH_TOKEN_TTL || '30d';
 const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
 const JWT_SECRET = process.env.JWT_SECRET;
+const appEnv = (process.env.APP_ENV || 'development').toLowerCase();
 
 if (!JWT_SECRET) {
   throw new Error('JWT_SECRET is not set');
@@ -96,9 +98,21 @@ const createRefreshToken = (user, deviceId, deviceType) => {
 router.post('/signup', validate(signupSchema), async (req, res, next) => {
   try {
     const { name, email, password, company, site, adminCode } = req.data; // use validated data
+    console.log('Signup admin code check:', {
+      provided: Boolean(adminCode),
+      configured: Boolean(process.env.ADMIN_SIGNUP_CODE),
+      matches: Boolean(adminCode && process.env.ADMIN_SIGNUP_CODE && safeEqual(adminCode, process.env.ADMIN_SIGNUP_CODE))
+    });
     if (!company || !site) {
       return res.status(400).json({ message: 'Company and site are required' });
     }
+    
+    // Check database connection
+    if (mongoose.connection.readyState !== 1) {
+      console.error('Database not connected. ReadyState:', mongoose.connection.readyState);
+      return res.status(503).json({ message: 'Database connection unavailable. Please try again later.' });
+    }
+    
     const existing = await User.findOne({ email });
     if (existing) {
       return res.status(400).json({ message: 'Email already registered' });
@@ -106,20 +120,78 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
     // Admin signup is only allowed when explicitly enabled via env code.
     // In production, keep ADMIN_SIGNUP_CODE unset to prevent public admin creation.
     const configuredAdminCode = process.env.ADMIN_SIGNUP_CODE;
-    const role =
-      configuredAdminCode && adminCode && safeEqual(adminCode, configuredAdminCode) ? 'admin' : 'user';
+    const isAdminMatch =
+      configuredAdminCode && adminCode && safeEqual(adminCode, configuredAdminCode);
+    const role = isAdminMatch ? 'admin' : 'user';
 
     const user = await User.create({ name, email, password, role, company, site });
     const token = createToken(user);
     const { token: refreshToken, record } = createRefreshToken(user, null, 'web');
     user.refreshTokens = (user.refreshTokens || []).concat(record).slice(-10);
     await user.save();
-    return res.status(201).json({
+    const responsePayload = {
       token,
       refreshToken,
       user: { id: user._id, name: user.name, email: user.email, role: user.role, company: user.company, site: user.site }
-    });
+    };
+    if (appEnv === 'development') {
+      responsePayload.adminCodeStatus = {
+        provided: Boolean(adminCode),
+        configured: Boolean(configuredAdminCode),
+        matches: Boolean(isAdminMatch)
+      };
+    }
+    return res.status(201).json(responsePayload);
   } catch (err) {
+    // Log detailed error for debugging
+    console.error('Signup error:', {
+      message: err.message,
+      name: err.name,
+      code: err.code,
+      stack: appEnv === 'development' ? err.stack : undefined
+    });
+    
+    // Handle specific MongoDB errors
+    if (err.name === 'ValidationError') {
+      const messages = Object.values(err.errors).map(e => e.message).join(', ');
+      return res.status(400).json({ message: `Validation error: ${messages}` });
+    }
+    
+    if (err.code === 11000) {
+      // Check if it's a duplicate email or another unique constraint
+      if (err.message && err.message.includes('email')) {
+        return res.status(400).json({ message: 'Email already registered' });
+      }
+      // Handle other duplicate key errors (like phoneNumber index)
+      if (err.message && err.message.includes('phoneNumber')) {
+        console.error('phoneNumber index error - this should be fixed by migration:', err.message);
+        // Retry once after a brief delay to allow migration to complete
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        try {
+          const user = await User.create({ name, email, password, role, company, site });
+          const token = createToken(user);
+          const { token: refreshToken, record } = createRefreshToken(user, null, 'web');
+          user.refreshTokens = (user.refreshTokens || []).concat(record).slice(-10);
+          await user.save();
+          return res.status(201).json({
+            token,
+            refreshToken,
+            user: { id: user._id, name: user.name, email: user.email, role: user.role, company: user.company, site: user.site }
+          });
+        } catch (retryErr) {
+          return res.status(500).json({ 
+            message: 'Account creation failed. Please contact support if this persists.' 
+          });
+        }
+      }
+      return res.status(400).json({ message: 'A record with this information already exists' });
+    }
+    
+    if (err.name === 'MongoServerError' || err.name === 'MongoNetworkError') {
+      return res.status(503).json({ message: 'Database connection error. Please try again later.' });
+    }
+    
+    // Generic error handler
     return next(err);
   }
 });

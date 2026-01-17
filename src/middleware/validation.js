@@ -8,9 +8,14 @@ const validate = (schema, options = {}) => (req, res, next) => {
     return next();
   } catch (err) {
     if (err instanceof z.ZodError) {
+      const issues = Array.isArray(err.errors)
+        ? err.errors
+        : Array.isArray(err.issues)
+          ? err.issues
+          : [];
       return res.status(400).json({
         message: 'Validation failed',
-        errors: err.errors.map((e) => ({ field: e.path.join('.'), message: e.message }))
+        errors: issues.map((e) => ({ field: e.path.join('.'), message: e.message }))
       });
     }
     return next(err);
