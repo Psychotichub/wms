@@ -23,8 +23,16 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
+const requireActiveSite = (req, res, next) => {
+  if (!req.user || !req.user.site) {
+    return res.status(400).json({ message: 'Active site is required. Set a site in settings first.' });
+  }
+  next();
+};
+
 module.exports = {
   authenticateToken,
-  requireAdmin
+  requireAdmin,
+  requireActiveSite
 };
 

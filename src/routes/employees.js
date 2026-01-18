@@ -4,11 +4,11 @@ const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
 const Location = require('../models/Location');
 const { validateDeviceBinding } = require('./devices');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
 
 // Use shared JWT auth middleware
-const requireAuth = authenticateToken;
+const requireAuth = [authenticateToken, requireActiveSite];
 
 const idParamsSchema = z.object({
   id: z.string().min(1)

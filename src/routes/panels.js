@@ -1,6 +1,6 @@
 const express = require('express');
 const Panel = require('../models/Panel');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
 
 const router = express.Router();
@@ -19,7 +19,7 @@ const panelUpdateSchema = z.object({
   circuit: z.string().min(1).optional()
 });
 
-router.get('/', authenticateToken, async (req, res, next) => {
+router.get('/', authenticateToken, requireActiveSite, async (req, res, next) => {
   try {
     // Allow all users to see panels for their company/site
     const query = { company: req.user.company, site: req.user.site };
@@ -30,7 +30,7 @@ router.get('/', authenticateToken, async (req, res, next) => {
   }
 });
 
-router.post('/', authenticateToken, validate(panelCreateSchema), async (req, res, next) => {
+router.post('/', authenticateToken, requireActiveSite, validate(panelCreateSchema), async (req, res, next) => {
   try {
     const { name, circuit } = req.data;
     const existing = await Panel.findOne({
@@ -64,6 +64,7 @@ router.post('/', authenticateToken, validate(panelCreateSchema), async (req, res
 router.put(
   '/:id',
   authenticateToken,
+  requireActiveSite,
   validate(idParamsSchema, { source: 'params' }),
   validate(panelUpdateSchema),
   async (req, res, next) => {
@@ -102,7 +103,7 @@ router.put(
   }
 });
 
-router.delete('/:id', authenticateToken, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
+router.delete('/:id', authenticateToken, requireActiveSite, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
   try {
     const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
     const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };

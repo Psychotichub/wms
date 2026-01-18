@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const { authenticateToken } = require('../middleware/auth');
+const { createAccessToken } = require('../utils/tokens');
 
 
 
@@ -17,7 +18,7 @@ const signupSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
   company: z.string().min(1),
-  site: z.string().min(1),
+  site: z.string().min(1).optional(),
   adminCode: z.string().min(1).optional()
 });
 
@@ -41,12 +42,8 @@ const logoutSchema = z.object({
 const ACCESS_TOKEN_TTL = process.env.ACCESS_TOKEN_TTL || '15m';
 const REFRESH_TOKEN_TTL = process.env.REFRESH_TOKEN_TTL || '30d';
 const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
-const JWT_SECRET = process.env.JWT_SECRET;
 const appEnv = (process.env.APP_ENV || 'development').toLowerCase();
 
-if (!JWT_SECRET) {
-  throw new Error('JWT_SECRET is not set');
-}
 if (!REFRESH_TOKEN_SECRET) {
   // Fail fast with a clear error instead of a confusing jsonwebtoken stack trace.
   throw new Error('REFRESH_TOKEN_SECRET is not set');
@@ -65,13 +62,6 @@ const safeEqual = (a, b) => {
     return false;
   }
 };
-
-const createToken = (user) =>
-  jwt.sign(
-    { id: user._id, email: user.email, role: user.role, company: user.company, site: user.site },
-    JWT_SECRET,
-    { expiresIn: ACCESS_TOKEN_TTL }
-  );
 
 const createRefreshToken = (user, deviceId, deviceType) => {
   const jti = crypto.randomBytes(32).toString('hex');
@@ -98,14 +88,16 @@ const createRefreshToken = (user, deviceId, deviceType) => {
 router.post('/signup', validate(signupSchema), async (req, res, next) => {
   try {
     const { name, email, password, company, site, adminCode } = req.data; // use validated data
+    const normalizedEmail = String(email || '').trim().toLowerCase();
     console.log('Signup admin code check:', {
       provided: Boolean(adminCode),
       configured: Boolean(process.env.ADMIN_SIGNUP_CODE),
       matches: Boolean(adminCode && process.env.ADMIN_SIGNUP_CODE && safeEqual(adminCode, process.env.ADMIN_SIGNUP_CODE))
     });
-    if (!company || !site) {
-      return res.status(400).json({ message: 'Company and site are required' });
+    if (!company) {
+      return res.status(400).json({ message: 'Company is required' });
     }
+    const resolvedSite = site ? String(site).trim() : '';
     
     // Check database connection
     if (mongoose.connection.readyState !== 1) {
@@ -113,7 +105,7 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
       return res.status(503).json({ message: 'Database connection unavailable. Please try again later.' });
     }
     
-    const existing = await User.findOne({ email });
+    const existing = await User.findOne({ email: normalizedEmail });
     if (existing) {
       return res.status(400).json({ message: 'Email already registered' });
     }
@@ -124,15 +116,31 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
       configuredAdminCode && adminCode && safeEqual(adminCode, configuredAdminCode);
     const role = isAdminMatch ? 'admin' : 'user';
 
-    const user = await User.create({ name, email, password, role, company, site });
-    const token = createToken(user);
+    const user = await User.create({
+      name,
+      email: normalizedEmail,
+      password,
+      role,
+      company,
+      site: resolvedSite || null,
+      sites: resolvedSite ? [resolvedSite] : []
+    });
+    const token = createAccessToken(user);
     const { token: refreshToken, record } = createRefreshToken(user, null, 'web');
     user.refreshTokens = (user.refreshTokens || []).concat(record).slice(-10);
     await user.save();
     const responsePayload = {
       token,
       refreshToken,
-      user: { id: user._id, name: user.name, email: user.email, role: user.role, company: user.company, site: user.site }
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        company: user.company,
+        site: user.site,
+        sites: user.sites || []
+      }
     };
     if (appEnv === 'development') {
       responsePayload.adminCodeStatus = {
@@ -168,15 +176,32 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
         // Retry once after a brief delay to allow migration to complete
         await new Promise(resolve => setTimeout(resolve, 1000));
         try {
-          const user = await User.create({ name, email, password, role, company, site });
-          const token = createToken(user);
+          const resolvedSite = site ? String(site).trim() : '';
+          const user = await User.create({
+            name,
+            email: normalizedEmail,
+            password,
+            role,
+            company,
+            site: resolvedSite || null,
+            sites: resolvedSite ? [resolvedSite] : []
+          });
+          const token = createAccessToken(user);
           const { token: refreshToken, record } = createRefreshToken(user, null, 'web');
           user.refreshTokens = (user.refreshTokens || []).concat(record).slice(-10);
           await user.save();
           return res.status(201).json({
             token,
             refreshToken,
-            user: { id: user._id, name: user.name, email: user.email, role: user.role, company: user.company, site: user.site }
+            user: {
+              id: user._id,
+              name: user.name,
+              email: user.email,
+              role: user.role,
+              company: user.company,
+              site: user.site,
+              sites: user.sites || []
+            }
           });
         } catch (retryErr) {
           return res.status(500).json({ 
@@ -199,7 +224,8 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
 router.post('/login', validate(loginSchema), async (req, res, next) => {
   try {
     const { email, password, company, site, deviceId, deviceType } = req.data; // use validated data
-    const user = await User.findOne({ email });
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
     if (!user) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
@@ -227,14 +253,22 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
       return res.status(403).json({ message: 'Device binding required' });
     }
 
-    const token = createToken(user);
+    const token = createAccessToken(user);
     const { token: refreshToken, record } = createRefreshToken(user, deviceId, deviceType);
     user.refreshTokens = (user.refreshTokens || []).concat(record).slice(-10);
     await user.save();
     return res.json({
       token,
       refreshToken,
-      user: { id: user._id, name: user.name, email: user.email, role: user.role, company: user.company, site: user.site }
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        company: user.company,
+        site: user.site,
+        sites: user.sites || []
+      }
     });
   } catch (err) {
     return next(err);
@@ -279,11 +313,19 @@ router.post('/refresh', validate(refreshSchema), async (req, res, next) => {
     user.refreshTokens = user.refreshTokens.concat(record).slice(-10);
     await user.save();
 
-    const token = createToken(user);
+    const token = createAccessToken(user);
     return res.json({
       token,
       refreshToken: newRefreshToken,
-      user: { id: user._id, name: user.name, email: user.email, role: user.role, company: user.company, site: user.site }
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        company: user.company,
+        site: user.site,
+        sites: user.sites || []
+      }
     });
   } catch (err) {
     return next(err);

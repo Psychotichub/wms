@@ -2,7 +2,7 @@ const express = require('express');
 const DailyReport = require('../models/DailyReport');
 const Panel = require('../models/Panel');
 const Material = require('../models/Material');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
 
 const router = express.Router();
@@ -37,7 +37,7 @@ const dailyUpdateSchema = z.object({
   notes: z.string().optional()
 });
 
-router.get('/daily', authenticateToken, async (req, res, next) => {
+router.get('/daily', authenticateToken, requireActiveSite, async (req, res, next) => {
   try {
     const query =
       req.user.role === 'admin'
@@ -50,7 +50,7 @@ router.get('/daily', authenticateToken, async (req, res, next) => {
   }
 });
 
-router.post('/daily', authenticateToken, validate(dailyCreateSchema), async (req, res, next) => {
+router.post('/daily', authenticateToken, requireActiveSite, validate(dailyCreateSchema), async (req, res, next) => {
   try {
     const { date, summary, tasks, status, materialId, quantity, location, panel, circuit, notes } = req.data;
 
@@ -96,6 +96,7 @@ router.post('/daily', authenticateToken, validate(dailyCreateSchema), async (req
 router.put(
   '/daily/:id',
   authenticateToken,
+  requireActiveSite,
   validate(idParamsSchema, { source: 'params' }),
   validate(dailyUpdateSchema),
   async (req, res, next) => {
@@ -141,7 +142,7 @@ router.put(
   }
 });
 
-router.delete('/daily/:id', authenticateToken, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
+router.delete('/daily/:id', authenticateToken, requireActiveSite, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
   try {
     const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
     const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };

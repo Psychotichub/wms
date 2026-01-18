@@ -1,6 +1,6 @@
 const express = require('express');
 const User = require('../models/User');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { authenticateToken, requireAdmin, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
 
 const router = express.Router();
@@ -21,7 +21,7 @@ const passwordUpdateSchema = z.object({
   password: z.string().min(1)
 });
 
-router.get('/', authenticateToken, requireAdmin, async (req, res, next) => {
+router.get('/', authenticateToken, requireActiveSite, requireAdmin, async (req, res, next) => {
   try {
     const users = await User.find({ company: req.user.company, site: req.user.site }).select('-password');
     return res.json({ users });
@@ -33,6 +33,7 @@ router.get('/', authenticateToken, requireAdmin, async (req, res, next) => {
 router.put(
   '/:id/password',
   authenticateToken,
+  requireActiveSite,
   requireAdmin,
   validate(idParamsSchema, { source: 'params' }),
   validate(passwordUpdateSchema),
@@ -52,7 +53,7 @@ router.put(
   }
 });
 
-router.delete('/:id', authenticateToken, requireAdmin, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
+router.delete('/:id', authenticateToken, requireActiveSite, requireAdmin, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
   try {
     const user = await User.findOneAndDelete({ _id: req.params.id, company: req.user.company });
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -62,23 +63,27 @@ router.delete('/:id', authenticateToken, requireAdmin, validate(idParamsSchema, 
   }
 });
 
-router.post('/', authenticateToken, requireAdmin, validate(userCreateSchema), async (req, res, next) => {
+router.post('/', authenticateToken, requireActiveSite, requireAdmin, validate(userCreateSchema), async (req, res, next) => {
   try {
     const { name, email, password, role, company } = req.data;
+    const normalizedEmail = String(email || '').trim().toLowerCase();
     const site = req.user.site; // site locked to admin's site
+    if (!site) {
+      return res.status(400).json({ message: 'Active site is required. Set a site in settings first.' });
+    }
 
     const chosenCompany = company || req.user.company;
     if (!chosenCompany) {
       return res.status(400).json({ message: 'Company is required' });
     }
 
-    const existing = await User.findOne({ email });
+    const existing = await User.findOne({ email: normalizedEmail });
     if (existing) {
       return res.status(400).json({ message: 'Email already registered' });
     }
     const user = await User.create({
       name,
-      email,
+      email: normalizedEmail,
       password,
       role: role || 'user',
       company: chosenCompany,

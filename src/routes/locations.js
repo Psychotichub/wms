@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Location = require('../models/Location');
 const Attendance = require('../models/Attendance');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { authenticateToken, requireAdmin, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
 
 const idParamsSchema = z.object({
@@ -37,7 +37,7 @@ const attendanceHistoryQuerySchema = z.object({
 });
 
 // Get all geofences for the organization
-router.get('/geofences', authenticateToken, async (req, res) => {
+router.get('/geofences', authenticateToken, requireActiveSite, async (req, res) => {
   try {
     const orgId = req.user.organizationId || req.user.company || req.user.site;
     const locations = await Location.find({
@@ -64,7 +64,7 @@ router.get('/geofences', authenticateToken, async (req, res) => {
 });
 
 // Create a new location/geofence (Admin only)
-router.post('/', authenticateToken, requireAdmin, validate(locationCreateSchema), async (req, res) => {
+router.post('/', authenticateToken, requireActiveSite, requireAdmin, validate(locationCreateSchema), async (req, res) => {
   try {
     const { name, address, coordinates, type = 'polygon', radius, center } = req.data;
     const orgId = req.user.organizationId || req.user.company || req.user.site;
@@ -171,6 +171,7 @@ router.post('/', authenticateToken, requireAdmin, validate(locationCreateSchema)
 router.put(
   '/:id',
   authenticateToken,
+  requireActiveSite,
   requireAdmin,
   validate(idParamsSchema, { source: 'params' }),
   validate(locationUpdateSchema),
@@ -220,7 +221,7 @@ router.put(
 });
 
 // Delete a location (Admin only)
-router.delete('/:id', authenticateToken, requireAdmin, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
+router.delete('/:id', authenticateToken, requireActiveSite, requireAdmin, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
   try {
     const location = await Location.findOneAndUpdate(
       { _id: req.params.id, organizationId: req.user.organizationId },
@@ -243,7 +244,7 @@ router.delete('/:id', authenticateToken, requireAdmin, validate(idParamsSchema, 
 });
 
 // Get attendance history for current user with location info
-router.get('/attendance/history', authenticateToken, validate(attendanceHistoryQuerySchema, { source: 'query' }), async (req, res) => {
+router.get('/attendance/history', authenticateToken, requireActiveSite, validate(attendanceHistoryQuerySchema, { source: 'query' }), async (req, res) => {
   try {
     const { startDate, endDate, locationId } = req.data;
 
@@ -295,7 +296,7 @@ router.get('/attendance/history', authenticateToken, validate(attendanceHistoryQ
 });
 
 // Check if user is currently checked in at any location
-router.get('/attendance/current', authenticateToken, async (req, res) => {
+router.get('/attendance/current', authenticateToken, requireActiveSite, async (req, res) => {
   try {
     const currentAttendance = await Attendance.findOne({
       employee: req.user.userId,

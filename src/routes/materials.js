@@ -1,6 +1,6 @@
 const express = require('express');
 const Material = require('../models/Material');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
 
 const router = express.Router();
@@ -28,7 +28,7 @@ const materialPriceSchema = z.object({
   price: z.union([z.number(), z.string()])
 });
 
-router.get('/', authenticateToken, async (req, res, next) => {
+router.get('/', authenticateToken, requireActiveSite, async (req, res, next) => {
   try {
     // Allow all users to see materials scoped to their company/site so they can use them in reports/receipts
     const query = { company: req.user.company, site: req.user.site };
@@ -39,7 +39,7 @@ router.get('/', authenticateToken, async (req, res, next) => {
   }
 });
 
-router.post('/', authenticateToken, validate(materialCreateSchema), async (req, res, next) => {
+router.post('/', authenticateToken, requireActiveSite, validate(materialCreateSchema), async (req, res, next) => {
   try {
     const { name, quantity = 0, unit, materialPrice = 0, labourPrice = 0, price, location, panel, circuit, receivedAt } = req.data;
     const existing = await Material.findOne({
@@ -79,6 +79,7 @@ router.post('/', authenticateToken, validate(materialCreateSchema), async (req, 
 router.put(
   '/:id',
   authenticateToken,
+  requireActiveSite,
   validate(idParamsSchema, { source: 'params' }),
   validate(materialUpdateSchema),
   async (req, res, next) => {
@@ -131,6 +132,7 @@ router.put(
 router.put(
   '/:id/price',
   authenticateToken,
+  requireActiveSite,
   validate(idParamsSchema, { source: 'params' }),
   validate(materialPriceSchema),
   async (req, res, next) => {
@@ -147,7 +149,7 @@ router.put(
   }
 });
 
-router.delete('/:id', authenticateToken, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
+router.delete('/:id', authenticateToken, requireActiveSite, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
   try {
     const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
     const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };

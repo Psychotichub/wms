@@ -1,7 +1,7 @@
 const express = require('express');
 const Received = require('../models/Received');
 const Material = require('../models/Material');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
 
 const router = express.Router();
@@ -20,7 +20,7 @@ const receivedCreateSchema = z.object({
 const receivedUpdateSchema = receivedCreateSchema.partial();
 
 // Get all received records for the company/site
-router.get('/', authenticateToken, async (req, res, next) => {
+router.get('/', authenticateToken, requireActiveSite, async (req, res, next) => {
   try {
     const query = { company: req.user.company, site: req.user.site };
     const records = await Received.find(query).sort({ date: -1 });
@@ -31,7 +31,7 @@ router.get('/', authenticateToken, async (req, res, next) => {
 });
 
 // Create a new received record
-router.post('/', authenticateToken, validate(receivedCreateSchema), async (req, res, next) => {
+router.post('/', authenticateToken, requireActiveSite, validate(receivedCreateSchema), async (req, res, next) => {
   try {
     const { materialName, quantity, notes, date } = req.data;
 
@@ -69,6 +69,7 @@ router.post('/', authenticateToken, validate(receivedCreateSchema), async (req, 
 router.put(
   '/:id',
   authenticateToken,
+  requireActiveSite,
   validate(idParamsSchema, { source: 'params' }),
   validate(receivedUpdateSchema),
   async (req, res, next) => {
@@ -106,7 +107,7 @@ router.put(
 });
 
 // Delete a record
-router.delete('/:id', authenticateToken, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
+router.delete('/:id', authenticateToken, requireActiveSite, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
   try {
     const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
     const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };

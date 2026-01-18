@@ -41,11 +41,13 @@ const receivedRoutes = require('./routes/received');
 const panelRoutes = require('./routes/panels');
 const userRoutes = require('./routes/users');
 const settingsRoutes = require('./routes/settings');
+const sitesRoutes = require('./routes/sites');
 const employeeRoutes = require('./routes/employees');
 const timeTrackingRoutes = require('./routes/timeTracking');
 const notificationRoutes = require('./routes/notifications');
 const locationRoutes = require('./routes/locations');
 const { router: deviceRoutes } = require('./routes/devices');
+const telemetryRoutes = require('./routes/telemetry');
 
 const app = express();
 const port = process.env.PORT || 4000;
@@ -127,11 +129,13 @@ app.use('/api/received', receivedRoutes);
 app.use('/api/panels', panelRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/sites', sitesRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/time', timeTrackingRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/devices', deviceRoutes);
+app.use('/api/telemetry', telemetryRoutes);
 
 app.use((err, _req, res, _next) => {
   // Generic error handler to avoid leaking details
