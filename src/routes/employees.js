@@ -3,6 +3,10 @@ const router = express.Router();
 const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
 const Location = require('../models/Location');
+const User = require('../models/User');
+const DailyReport = require('../models/DailyReport');
+const Notification = require('../models/Notification');
+const NotificationPreferences = require('../models/NotificationPreferences');
 const { validateDeviceBinding } = require('./devices');
 const { authenticateToken, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
@@ -571,6 +575,62 @@ router.post('/attendance/checkout', requireAuth, validate(geofenceCheckOutSchema
 
     await attendance.clockOut();
     await attendance.populate('employee', 'name email');
+
+    // Notify user if no daily report was created for today (once per day)
+    try {
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(startOfDay);
+      endOfDay.setDate(endOfDay.getDate() + 1);
+
+      const hasReport = await DailyReport.exists({
+        createdBy: userId,
+        company: req.user.company,
+        site: req.user.site,
+        date: { $gte: startOfDay, $lt: endOfDay }
+      });
+
+      if (!hasReport) {
+        const admins = await User.find({
+          company: req.user.company,
+          site: req.user.site,
+          role: 'admin'
+        }).select('_id');
+        const recipientIds = Array.from(new Set([
+          String(userId),
+          ...admins.map((admin) => String(admin._id))
+        ]));
+        const employeeName = attendance.employee?.name || 'User';
+
+        await Promise.all(
+          recipientIds.map(async (recipientId) => {
+            const alreadyNotified = await Notification.exists({
+              recipient: recipientId,
+              type: 'daily_report_missing',
+              createdAt: { $gte: startOfDay, $lt: endOfDay }
+            });
+            if (alreadyNotified) return;
+            const isSelf = String(recipientId) === String(userId);
+            await NotificationPreferences.sendNotificationIfAllowed(recipientId, {
+              recipient: recipientId,
+              sender: userId,
+              title: 'Daily report missing',
+              message: isSelf
+                ? 'You checked out without submitting a daily report for today.'
+                : `${employeeName} checked out without submitting a daily report for today.`,
+              type: 'daily_report_missing',
+              priority: 'high',
+              data: {
+                date: startOfDay.toISOString().slice(0, 10),
+                employeeId: String(userId)
+              }
+            });
+          })
+        );
+      }
+    } catch (notifyError) {
+      console.error('Failed to send daily report reminder:', notifyError);
+    }
 
     res.json({
       attendance: {

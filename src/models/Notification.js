@@ -34,7 +34,9 @@ const notificationSchema = new mongoose.Schema({
       'system_announcement',
       'reminder',
       'overtime_alert',
-      'schedule_change'
+        'schedule_change',
+        'low_stock',
+        'daily_report_missing'
     ],
     required: true
   },

@@ -25,7 +25,9 @@ const notificationPreferencesSchema = new mongoose.Schema({
     system_announcement: { type: Boolean, default: true },
     reminder: { type: Boolean, default: true },
     overtime_alert: { type: Boolean, default: true },
-    schedule_change: { type: Boolean, default: true }
+    schedule_change: { type: Boolean, default: true },
+    low_stock: { type: Boolean, default: true },
+    daily_report_missing: { type: Boolean, default: true }
   },
   reminderSettings: {
     deadlineReminders: {

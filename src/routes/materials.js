@@ -1,5 +1,7 @@
 const express = require('express');
 const Material = require('../models/Material');
+const User = require('../models/User');
+const NotificationPreferences = require('../models/NotificationPreferences');
 const { authenticateToken, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
 
@@ -27,6 +29,44 @@ const materialUpdateSchema = materialCreateSchema.partial();
 const materialPriceSchema = z.object({
   price: z.union([z.number(), z.string()])
 });
+
+const getLowStockThreshold = () => {
+  const value = Number(process.env.LOW_STOCK_THRESHOLD);
+  if (Number.isFinite(value) && value >= 0) return value;
+  return 5;
+};
+
+const notifyLowStockIfNeeded = async ({ material, prevQuantity, triggeredBy }) => {
+  const threshold = getLowStockThreshold();
+  if (!Number.isFinite(material.quantity)) return;
+  if (threshold < 0) return;
+  if (material.quantity > threshold) return;
+  if (Number.isFinite(prevQuantity) && prevQuantity <= threshold) return;
+
+  const recipients = await User.find({
+    company: material.company,
+    site: material.site
+  }).select('_id');
+
+  const uniqueIds = Array.from(new Set(recipients.map((u) => String(u._id))));
+  await Promise.all(
+    uniqueIds.map((id) =>
+      NotificationPreferences.sendNotificationIfAllowed(id, {
+        recipient: id,
+        sender: triggeredBy,
+        title: `Low stock: ${material.name}`,
+        message: `Only ${material.quantity} ${material.unit || ''} left. Please restock.`,
+        type: 'low_stock',
+        priority: 'high',
+        data: {
+          materialId: String(material._id),
+          quantity: material.quantity,
+          threshold
+        }
+      })
+    )
+  );
+};
 
 router.get('/', authenticateToken, requireActiveSite, async (req, res, next) => {
   try {
@@ -66,6 +106,11 @@ router.post('/', authenticateToken, requireActiveSite, validate(materialCreateSc
       company: req.user.company,
       site: req.user.site,
       createdBy: req.user.id
+    });
+    await notifyLowStockIfNeeded({
+      material,
+      prevQuantity: Number.POSITIVE_INFINITY,
+      triggeredBy: req.user.id
     });
     return res.status(201).json({ material });
   } catch (err) {
@@ -119,10 +164,19 @@ router.put(
 
     const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
     const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
+    const existing = await Material.findOne(filter);
+    if (!existing) {
+      return res.status(404).json({ message: 'Material not found' });
+    }
     const material = await Material.findOneAndUpdate(filter, updates, { new: true });
     if (!material) {
       return res.status(404).json({ message: 'Material not found' });
     }
+    await notifyLowStockIfNeeded({
+      material,
+      prevQuantity: existing.quantity,
+      triggeredBy: req.user.id
+    });
     return res.json({ material });
   } catch (err) {
     return next(err);

@@ -1,6 +1,8 @@
 const express = require('express');
 const Received = require('../models/Received');
 const Material = require('../models/Material');
+const User = require('../models/User');
+const NotificationPreferences = require('../models/NotificationPreferences');
 const { authenticateToken, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
 
@@ -18,6 +20,44 @@ const receivedCreateSchema = z.object({
 });
 
 const receivedUpdateSchema = receivedCreateSchema.partial();
+
+const getLowStockThreshold = () => {
+  const value = Number(process.env.LOW_STOCK_THRESHOLD);
+  if (Number.isFinite(value) && value >= 0) return value;
+  return 5;
+};
+
+const notifyLowStockIfNeeded = async ({ material, prevQuantity, triggeredBy }) => {
+  const threshold = getLowStockThreshold();
+  if (!Number.isFinite(material.quantity)) return;
+  if (threshold < 0) return;
+  if (material.quantity > threshold) return;
+  if (Number.isFinite(prevQuantity) && prevQuantity <= threshold) return;
+
+  const recipients = await User.find({
+    company: material.company,
+    site: material.site
+  }).select('_id');
+
+  const uniqueIds = Array.from(new Set(recipients.map((u) => String(u._id))));
+  await Promise.all(
+    uniqueIds.map((id) =>
+      NotificationPreferences.sendNotificationIfAllowed(id, {
+        recipient: id,
+        sender: triggeredBy,
+        title: `Low stock: ${material.name}`,
+        message: `Only ${material.quantity} ${material.unit || ''} left. Please restock.`,
+        type: 'low_stock',
+        priority: 'high',
+        data: {
+          materialId: String(material._id),
+          quantity: material.quantity,
+          threshold
+        }
+      })
+    )
+  );
+};
 
 // Get all received records for the company/site
 router.get('/', authenticateToken, requireActiveSite, async (req, res, next) => {
@@ -56,8 +96,14 @@ router.post('/', authenticateToken, requireActiveSite, validate(receivedCreateSc
     });
 
     // Update material quantity
-    material.quantity = (material.quantity || 0) + Number(quantity);
+    const prevQuantity = material.quantity || 0;
+    material.quantity = prevQuantity + Number(quantity);
     await material.save();
+    await notifyLowStockIfNeeded({
+      material,
+      prevQuantity,
+      triggeredBy: req.user.id
+    });
 
     return res.status(201).json({ record });
   } catch (err) {
@@ -89,8 +135,14 @@ router.put(
         site: req.user.site
       });
       if (material) {
-        material.quantity = (material.quantity || 0) - oldRecord.quantity + Number(quantity);
+        const prevQuantity = material.quantity || 0;
+        material.quantity = prevQuantity - oldRecord.quantity + Number(quantity);
         await material.save();
+        await notifyLowStockIfNeeded({
+          material,
+          prevQuantity,
+          triggeredBy: req.user.id
+        });
       }
     }
 
@@ -122,8 +174,14 @@ router.delete('/:id', authenticateToken, requireActiveSite, validate(idParamsSch
       site: req.user.site
     });
     if (material) {
-      material.quantity = (material.quantity || 0) - record.quantity;
+      const prevQuantity = material.quantity || 0;
+      material.quantity = prevQuantity - record.quantity;
       await material.save();
+      await notifyLowStockIfNeeded({
+        material,
+        prevQuantity,
+        triggeredBy: req.user.id
+      });
     }
 
     await Received.deleteOne({ _id: record._id });
