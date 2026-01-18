@@ -13,5 +13,9 @@ const ReceivedSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Query optimization for date- and scope-based lookups
+ReceivedSchema.index({ company: 1, site: 1, date: -1 });
+ReceivedSchema.index({ date: -1 });
+
 module.exports = mongoose.model('Received', ReceivedSchema);
 

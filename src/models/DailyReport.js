@@ -19,5 +19,9 @@ const DailyReportSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Query optimization for date- and scope-based lookups
+DailyReportSchema.index({ company: 1, site: 1, date: -1 });
+DailyReportSchema.index({ date: -1 });
+
 module.exports = mongoose.model('DailyReport', DailyReportSchema);
 

@@ -47,6 +47,9 @@ UserSchema.methods.comparePassword = function comparePassword(candidate) {
   return bcrypt.compare(candidate, this.password);
 };
 
+// Query optimization for common filters
+UserSchema.index({ company: 1, site: 1 });
+
 const User = mongoose.model('User', UserSchema);
 
 // Drop old phoneNumber index if it exists (from previous schema version)
