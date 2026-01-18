@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const fs = require('fs');
 const path = require('path');
 const helmet = require('helmet');
+const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const dbConnect = require('./config/db');
 
@@ -55,6 +56,7 @@ const port = process.env.PORT || 4000;
 dbConnect();
 
 app.use(helmet());
+app.use(compression());
 
 // CORS
 // - Native apps often send no Origin header -> allow (origin === undefined/null)
