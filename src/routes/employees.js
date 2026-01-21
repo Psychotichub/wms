@@ -684,6 +684,77 @@ router.get('/attendance/current', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/employees/active-locations - Get all active employees with their clock-in locations (for map view)
+router.get('/active-locations', requireAuth, async (req, res) => {
+  try {
+    const orgId = req.user.organizationId || req.user.company || req.user.site;
+    
+    // Get all active attendance records with location data
+    // Note: The employee field in Attendance actually stores User IDs, not Employee IDs
+    const activeAttendances = await Attendance.find({
+      status: 'active',
+      'location.latitude': { $exists: true, $ne: null },
+      'location.longitude': { $exists: true, $ne: null }
+    })
+      .select('employee clockInTime location')
+      .lean();
+
+    // Get unique user IDs from attendances
+    const userIds = [...new Set(activeAttendances
+      .map(a => a.employee)
+      .filter(Boolean)
+      .map(id => id.toString())
+    )];
+
+    // Fetch user data for all users
+    const User = require('../models/User');
+    const users = await User.find({ _id: { $in: userIds } })
+      .select('name email role')
+      .lean();
+
+    // Create a map of user ID to user data
+    const userMap = new Map(users.map(u => [u._id.toString(), u]));
+
+    // Filter and map attendance records to location data
+    const employeeLocations = activeAttendances
+      .filter(attendance => {
+        // Must have location data and valid employee/user reference
+        return attendance.location?.latitude && 
+               attendance.location?.longitude &&
+               attendance.employee;
+      })
+      .map(attendance => {
+        const userId = attendance.employee?.toString() || attendance.employee?._id?.toString();
+        const user = userId ? userMap.get(userId) : null;
+        
+        return {
+          employeeId: userId || null,
+          employeeName: user?.name || 'Unknown',
+          employeeRole: user?.role || 'user',
+          latitude: attendance.location.latitude,
+          longitude: attendance.location.longitude,
+          locationName: attendance.location.locationName || 'Unknown Location',
+          checkInTime: attendance.clockInTime,
+          elapsedTime: Date.now() - new Date(attendance.clockInTime).getTime()
+        };
+      })
+      .filter(loc => loc.employeeId !== null); // Remove any with invalid user IDs
+
+    res.json({
+      locations: employeeLocations,
+      count: employeeLocations.length,
+      success: true
+    });
+  } catch (error) {
+    console.error('Error fetching active employee locations:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch active employee locations', 
+      success: false,
+      details: error.message 
+    });
+  }
+});
+
 // Enhanced location validation function
 async function validateLocationData({ latitude, longitude, accuracy, speed, altitude, heading, deviceInfo }) {
   const validation = {
