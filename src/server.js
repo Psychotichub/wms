@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const helmet = require('helmet');
 const compression = require('compression');
-const rateLimit = require('express-rate-limit');
+// const rateLimit = require('express-rate-limit');
 const dbConnect = require('./config/db');
 
 // Environment loading / switching
@@ -49,11 +49,17 @@ const notificationRoutes = require('./routes/notifications');
 const locationRoutes = require('./routes/locations');
 const { router: deviceRoutes } = require('./routes/devices');
 const telemetryRoutes = require('./routes/telemetry');
+const contractRoutes = require('./routes/contracts');
+const inventoryRoutes = require('./routes/inventory');
+const { initializeScheduledJobs } = require('./utils/scheduler');
 
 const app = express();
 const port = process.env.PORT || 4000;
 
 dbConnect();
+
+// Initialize scheduled jobs (cron tasks)
+initializeScheduledJobs();
 
 app.use(helmet());
 app.use(compression());
@@ -94,30 +100,30 @@ app.use(
   })
 );
 
-// Rate limiting
+// Rate limiting - COMMENTED OUT
 // In development, disable by default to avoid blocking local testing.
-const rateLimitWindowMs =
-  Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000;
-const rateLimitMax =
-  Number(process.env.RATE_LIMIT_MAX) ||
-  (appEnv === 'production' ? 100 : 10000);
-const rateLimitEnabled =
-  (process.env.RATE_LIMIT_ENABLED || (appEnv === 'production' ? 'true' : 'false')).toLowerCase() === 'true';
+// const rateLimitWindowMs =
+//   Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000;
+// const rateLimitMax =
+//   Number(process.env.RATE_LIMIT_MAX) ||
+//   (appEnv === 'production' ? 100 : 10000);
+// const rateLimitEnabled =
+//   (process.env.RATE_LIMIT_ENABLED || (appEnv === 'production' ? 'true' : 'false')).toLowerCase() === 'true';
 
-const limiter = rateLimit({
-  windowMs: rateLimitWindowMs,
-  max: rateLimitMax,
-  message: 'Too many requests from this IP, please try again later',
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip(req) {
-    // Don't rate-limit auth endpoints; prevents refresh/login loops from turning into 429s.
-    return req.path.startsWith('/api/auth/');
-  },
-});
-if (rateLimitEnabled) {
-  app.use(limiter);
-}
+// const limiter = rateLimit({
+//   windowMs: rateLimitWindowMs,
+//   max: rateLimitMax,
+//   message: 'Too many requests from this IP, please try again later',
+//   standardHeaders: true,
+//   legacyHeaders: false,
+//   skip(req) {
+//     // Don't rate-limit auth endpoints; prevents refresh/login loops from turning into 429s.
+//     return req.path.startsWith('/api/auth/');
+//   },
+// });
+// if (rateLimitEnabled) {
+//   app.use(limiter);
+// }
 app.use(express.json());
 
 app.get('/health', (_req, res) => {
@@ -138,6 +144,8 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/telemetry', telemetryRoutes);
+app.use('/api/contracts', contractRoutes);
+app.use('/api/inventory', inventoryRoutes);
 
 app.use((err, _req, res, _next) => {
   // Generic error handler to avoid leaking details
