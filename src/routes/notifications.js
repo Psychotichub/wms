@@ -3,10 +3,77 @@ const router = express.Router();
 const Notification = require('../models/Notification');
 const NotificationPreferences = require('../models/NotificationPreferences');
 const { validate, z } = require('../middleware/validation');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requireActiveSite } = require('../middleware/auth');
 
 // Middleware to check if user is authenticated
-const requireAuth = authenticateToken;
+const requireAuth = [authenticateToken, requireActiveSite];
+
+// Helper function to get or create Employee record for a user
+// Admins can have Employee records auto-created if they don't exist
+const getOrCreateEmployeeForUser = async (userId, userRole, userEmail, userName) => {
+  const Employee = require('../models/Employee');
+  let employee = await Employee.findOne({ user: userId });
+  
+  if (!employee) {
+    // If user is admin, try to find or create Employee record
+    if (userRole === 'admin') {
+      const normalizedEmail = userEmail ? userEmail.toLowerCase().trim() : null;
+      
+      // First, check if an Employee with this email already exists
+      if (normalizedEmail) {
+        const existingEmployee = await Employee.findOne({ email: normalizedEmail });
+        if (existingEmployee) {
+          // If Employee exists but isn't linked to this user, link it
+          if (!existingEmployee.user) {
+            existingEmployee.user = userId;
+            await existingEmployee.save();
+            return existingEmployee;
+          }
+          // If Employee is linked to a different user, use it anyway (might be shared admin account)
+          // But prefer to return the existing one linked to this user if possible
+          if (existingEmployee.user.toString() !== userId.toString()) {
+            // Employee exists but linked to different user - return it anyway for now
+            // In future, might want to handle this differently
+            return existingEmployee;
+          }
+        }
+      }
+      
+      // No existing Employee found, create a new one
+      try {
+        employee = await Employee.create({
+          name: userName || 'Admin User',
+          email: normalizedEmail || `admin-${userId}@system.local`,
+          role: 'admin',
+          user: userId,
+          isActive: true
+        });
+      } catch (error) {
+        // If creation fails due to duplicate email, try to find and link existing Employee
+        if (error.code === 11000 && error.keyPattern?.email) {
+          const existingEmployee = await Employee.findOne({ email: normalizedEmail || `admin-${userId}@system.local` });
+          if (existingEmployee) {
+            // Link existing Employee to this user if not already linked
+            if (!existingEmployee.user) {
+              existingEmployee.user = userId;
+              await existingEmployee.save();
+              return existingEmployee;
+            }
+            // Return existing Employee even if linked to different user
+            return existingEmployee;
+          }
+        }
+        // Re-throw if it's not a duplicate key error
+        throw error;
+      }
+    } else {
+      // Non-admin users must have Employee records
+      return null;
+    }
+  }
+  
+  return employee;
+};
 
 const idParamsSchema = z.object({
   id: z.string().min(1)
@@ -58,12 +125,34 @@ router.get('/', requireAuth, validate(notificationsQuerySchema, { source: 'query
   try {
     const { status, type, limit = 20, page = 1, includeExpired = false } = req.data;
     const userId = req.user?.id;
+    const userRole = req.user?.role;
+    const userEmail = req.user?.email;
+    const userName = req.user?.name;
 
     if (!userId) {
       return res.status(401).json({ error: 'User not authenticated' });
     }
 
-    const notifications = await Notification.getUserNotifications(userId, {
+    // Get or create Employee record (admins can have auto-created records)
+    // Notifications use Employee ID as recipient
+    const employee = await getOrCreateEmployeeForUser(userId, userRole, userEmail, userName);
+    if (!employee) {
+      // For non-admin users without Employee records, return empty results
+      return res.json({
+        notifications: [],
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: 0,
+          pages: 0
+        },
+        unreadCount: 0
+      });
+    }
+
+    const employeeId = employee._id;
+
+    const notifications = await Notification.getUserNotifications(employeeId, {
       status,
       type,
       limit: parseInt(limit),
@@ -72,7 +161,7 @@ router.get('/', requireAuth, validate(notificationsQuerySchema, { source: 'query
     });
 
     const total = await Notification.countDocuments({
-      recipient: userId,
+      recipient: employeeId,
       ...(status && { status }),
       ...(type && { type }),
       ...(!includeExpired || includeExpired !== 'true' ? {
@@ -85,7 +174,7 @@ router.get('/', requireAuth, validate(notificationsQuerySchema, { source: 'query
 
     // Get unread count
     const unreadCount = await Notification.countDocuments({
-      recipient: userId,
+      recipient: employeeId,
       status: { $ne: 'read' },
       $or: [
         { expiresAt: { $exists: false } },
@@ -109,82 +198,28 @@ router.get('/', requireAuth, validate(notificationsQuerySchema, { source: 'query
   }
 });
 
-// PUT /api/notifications/:id/read - Mark notification as read
-router.put('/:id/read', requireAuth, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
-  try {
-    const userId = req.user?.id;
-    const notificationId = req.params.id;
-
-    const notification = await Notification.findOne({
-      _id: notificationId,
-      recipient: userId
-    });
-
-    if (!notification) {
-      return res.status(404).json({ error: 'Notification not found' });
-    }
-
-    await notification.markAsRead();
-
-    res.json({ message: 'Notification marked as read' });
-  } catch (error) {
-    console.error('Error marking notification as read:', error);
-    res.status(500).json({ error: 'Failed to mark notification as read' });
-  }
-});
-
-// PUT /api/notifications/read-all - Mark all notifications as read
-router.put('/read-all', requireAuth, async (req, res) => {
-  try {
-    const userId = req.user?.id;
-
-    await Notification.updateMany(
-      { recipient: userId, status: { $ne: 'read' } },
-      { status: 'read', readAt: new Date() }
-    );
-
-    res.json({ message: 'All notifications marked as read' });
-  } catch (error) {
-    console.error('Error marking all notifications as read:', error);
-    res.status(500).json({ error: 'Failed to mark notifications as read' });
-  }
-});
-
-// DELETE /api/notifications/:id - Archive notification
-router.delete('/:id', requireAuth, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
-  try {
-    const userId = req.user?.id;
-    const notificationId = req.params.id;
-
-    const notification = await Notification.findOne({
-      _id: notificationId,
-      recipient: userId
-    });
-
-    if (!notification) {
-      return res.status(404).json({ error: 'Notification not found' });
-    }
-
-    notification.status = 'archived';
-    await notification.save();
-
-    res.json({ message: 'Notification archived' });
-  } catch (error) {
-    console.error('Error archiving notification:', error);
-    res.status(500).json({ error: 'Failed to archive notification' });
-  }
-});
-
+// IMPORTANT: These routes must be defined BEFORE parameterized routes like /:id
 // GET /api/notifications/preferences - Get user notification preferences
 router.get('/preferences', requireAuth, async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
+    const userRole = req.user?.role;
+    const userEmail = req.user?.email;
+    const userName = req.user?.name;
 
     if (!userId) {
       return res.status(401).json({ error: 'User not authenticated' });
     }
 
-    const preferences = await NotificationPreferences.getOrCreateForUser(userId);
+    // Get or create Employee record (admins can have auto-created records)
+    const employee = await getOrCreateEmployeeForUser(userId, userRole, userEmail, userName);
+    
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee record not found. Please ensure your user account is linked to an employee record.' });
+    }
+
+    // NotificationPreferences.user references Employee, not User
+    const preferences = await NotificationPreferences.getOrCreateForUser(employee._id);
 
     res.json({ preferences });
   } catch (error) {
@@ -196,22 +231,44 @@ router.get('/preferences', requireAuth, async (req, res) => {
 // PUT /api/notifications/preferences - Update notification preferences
 router.put('/preferences', requireAuth, validate(updatePreferencesSchema), async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
+    const userRole = req.user?.role;
+    const userEmail = req.user?.email;
+    const userName = req.user?.name;
 
     if (!userId) {
       return res.status(401).json({ error: 'User not authenticated' });
     }
 
+    // Get or create Employee record (admins can have auto-created records)
+    const employee = await getOrCreateEmployeeForUser(userId, userRole, userEmail, userName);
+    
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee record not found. Please ensure your user account is linked to an employee record.' });
+    }
+
+    // NotificationPreferences.user references Employee, not User
+    const preferences = await NotificationPreferences.getOrCreateForUser(employee._id);
+
+    // Update preferences
     const updateData = req.data;
     delete updateData.user; // Prevent user field from being updated
     delete updateData.createdAt; // Prevent timestamps from being updated
     delete updateData.updatedAt;
 
-    const preferences = await NotificationPreferences.findOneAndUpdate(
-      { user: userId },
-      { ...updateData, lastUpdated: new Date() },
-      { new: true, upsert: true, runValidators: true }
-    );
+    Object.keys(updateData).forEach(key => {
+      if (key === 'notificationTypes') {
+        preferences.notificationTypes = { ...preferences.notificationTypes, ...updateData[key] };
+      } else if (key === 'reminderSettings') {
+        preferences.reminderSettings = { ...preferences.reminderSettings, ...updateData[key] };
+      } else if (key === 'quietHours') {
+        preferences.quietHours = { ...preferences.quietHours, ...updateData[key] };
+      } else if (preferences[key] !== undefined) {
+        preferences[key] = updateData[key];
+      }
+    });
+
+    await preferences.save();
 
     res.json({
       preferences,
@@ -231,7 +288,10 @@ router.put('/preferences', requireAuth, validate(updatePreferencesSchema), async
 // POST /api/notifications/preferences/push-token - Update push token
 router.post('/preferences/push-token', requireAuth, validate(pushTokenSchema), async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
+    const userRole = req.user?.role;
+    const userEmail = req.user?.email;
+    const userName = req.user?.name;
     const { pushToken } = req.data;
 
     if (!userId) {
@@ -242,7 +302,15 @@ router.post('/preferences/push-token', requireAuth, validate(pushTokenSchema), a
       return res.status(400).json({ error: 'Push token is required' });
     }
 
-    const preferences = await NotificationPreferences.getOrCreateForUser(userId);
+    // Get or create Employee record (admins can have auto-created records)
+    const employee = await getOrCreateEmployeeForUser(userId, userRole, userEmail, userName);
+    
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee record not found. Please ensure your user account is linked to an employee record.' });
+    }
+
+    // NotificationPreferences.user references Employee, not User
+    const preferences = await NotificationPreferences.getOrCreateForUser(employee._id);
     await preferences.updatePushToken(pushToken);
 
     res.json({ message: 'Push token updated successfully' });
@@ -255,7 +323,10 @@ router.post('/preferences/push-token', requireAuth, validate(pushTokenSchema), a
 // POST /api/notifications/preferences/web-push-subscription - Update web push subscription (web only)
 router.post('/preferences/web-push-subscription', requireAuth, validate(webPushSubscriptionSchema), async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
+    const userRole = req.user?.role;
+    const userEmail = req.user?.email;
+    const userName = req.user?.name;
     const { subscription } = req.data;
 
     if (!userId) {
@@ -266,13 +337,126 @@ router.post('/preferences/web-push-subscription', requireAuth, validate(webPushS
       return res.status(400).json({ error: 'Subscription is required' });
     }
 
-    const preferences = await NotificationPreferences.getOrCreateForUser(userId);
+    // Get or create Employee record (admins can have auto-created records)
+    const employee = await getOrCreateEmployeeForUser(userId, userRole, userEmail, userName);
+    
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee record not found. Please ensure your user account is linked to an employee record.' });
+    }
+
+    // NotificationPreferences.user references Employee, not User
+    const preferences = await NotificationPreferences.getOrCreateForUser(employee._id);
     await preferences.updateWebPushSubscription(subscription);
 
     return res.json({ message: 'Web push subscription updated successfully' });
   } catch (error) {
     console.error('Error updating web push subscription:', error);
-    return res.status(500).json({ error: 'Failed to update web push subscription' });
+    res.status(500).json({ error: 'Failed to update web push subscription' });
+  }
+});
+
+// PUT /api/notifications/:id/read - Mark notification as read
+router.put('/:id/read', requireAuth, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    const userEmail = req.user?.email;
+    const userName = req.user?.name;
+    const notificationId = req.params.id;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    // Get or create Employee record (admins can have auto-created records)
+    const employee = await getOrCreateEmployeeForUser(userId, userRole, userEmail, userName);
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee record not found' });
+    }
+
+    const notification = await Notification.findOne({
+      _id: notificationId,
+      recipient: employee._id
+    });
+
+    if (!notification) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+
+    await notification.markAsRead();
+
+    res.json({ message: 'Notification marked as read' });
+  } catch (error) {
+    console.error('Error marking notification as read:', error);
+    res.status(500).json({ error: 'Failed to mark notification as read' });
+  }
+});
+
+// PUT /api/notifications/read-all - Mark all notifications as read
+router.put('/read-all', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    const userEmail = req.user?.email;
+    const userName = req.user?.name;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    // Get or create Employee record (admins can have auto-created records)
+    const employee = await getOrCreateEmployeeForUser(userId, userRole, userEmail, userName);
+    if (!employee) {
+      return res.json({ message: 'All notifications marked as read' }); // No employee = no notifications
+    }
+
+    await Notification.updateMany(
+      { recipient: employee._id, status: { $ne: 'read' } },
+      { status: 'read', readAt: new Date() }
+    );
+
+    res.json({ message: 'All notifications marked as read' });
+  } catch (error) {
+    console.error('Error marking all notifications as read:', error);
+    res.status(500).json({ error: 'Failed to mark notifications as read' });
+  }
+});
+
+// DELETE /api/notifications/:id - Archive notification
+router.delete('/:id', requireAuth, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    const userEmail = req.user?.email;
+    const userName = req.user?.name;
+    const notificationId = req.params.id;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    // Get or create Employee record (admins can have auto-created records)
+    const employee = await getOrCreateEmployeeForUser(userId, userRole, userEmail, userName);
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee record not found' });
+    }
+
+    const notification = await Notification.findOne({
+      _id: notificationId,
+      recipient: employee._id
+    });
+
+    if (!notification) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+
+    notification.status = 'archived';
+    await notification.save();
+
+    res.json({ message: 'Notification archived' });
+  } catch (error) {
+    console.error('Error archiving notification:', error);
+    res.status(500).json({ error: 'Failed to archive notification' });
   }
 });
 

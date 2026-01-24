@@ -28,7 +28,8 @@ const employeeCreateSchema = z.object({
   hourlyRate: z.union([z.number(), z.string()]).optional(),
   manager: z.string().optional(),
   address: z.any().optional(),
-  emergencyContact: z.any().optional()
+  emergencyContact: z.any().optional(),
+  password: z.string().min(6).optional() // Password to create User account
 });
 
 const employeeUpdateSchema = z.object({
@@ -42,7 +43,8 @@ const employeeUpdateSchema = z.object({
   isActive: z.union([z.boolean(), z.string()]).optional(),
   manager: z.string().optional(),
   address: z.any().optional(),
-  emergencyContact: z.any().optional()
+  emergencyContact: z.any().optional(),
+  password: z.string().min(6).optional() // Password to create/update User account
 });
 
 const geofenceCheckInSchema = z.object({
@@ -174,38 +176,69 @@ router.get('/:id', requireAuth, async (req, res) => {
   }
 });
 
-// POST /api/employees - Create new employee
+// POST /api/employees - Create new employee (and optionally User account)
 router.post('/', requireAuth, requireManager, validate(employeeCreateSchema), async (req, res) => {
   try {
-    const { name, email, phone, role, department, skills, hourlyRate, manager, address, emergencyContact } = req.data;
+    const { name, email, phone, role, department, skills, hourlyRate, manager, address, emergencyContact, password } = req.data;
+    const normalizedEmail = email.toLowerCase();
 
-    // Check if email already exists
-    const existingEmployee = await Employee.findOne({ email: email.toLowerCase() });
+    // Check if email already exists in Employee
+    const existingEmployee = await Employee.findOne({ email: normalizedEmail });
     if (existingEmployee) {
       return res.status(400).json({ error: 'Employee with this email already exists' });
     }
 
+    // Check if email already exists in User (if password provided)
+    let userAccount = null;
+    if (password) {
+      const existingUser = await User.findOne({ email: normalizedEmail });
+      if (existingUser) {
+        return res.status(400).json({ error: 'User account with this email already exists. Employee can be created without password, or link to existing user.' });
+      }
+
+      // Create User account
+      const company = req.user.company;
+      const site = req.user.site;
+      
+      userAccount = await User.create({
+        name,
+        email: normalizedEmail,
+        password,
+        role: 'user', // Employees get 'user' role by default
+        company,
+        site
+      });
+    }
+
+    // Create Employee
     const employee = new Employee({
       name,
-      email: email.toLowerCase(),
+      email: normalizedEmail,
       phone,
-      role,
+      role: role || 'worker',
       department,
       skills: skills || [],
       hourlyRate: hourlyRate || 0,
       manager,
       address,
-      emergencyContact
+      emergencyContact,
+      user: userAccount ? userAccount._id : undefined
     });
 
     await employee.save();
 
-    // Populate manager info in response
+    // Populate manager and user info in response
     await employee.populate('manager', 'name email');
+    if (userAccount) {
+      await employee.populate('user', 'name email role');
+    }
 
     res.status(201).json({
       employee,
-      message: 'Employee created successfully'
+      userCreated: !!userAccount,
+      message: userAccount 
+        ? 'Employee and user account created successfully' 
+        : 'Employee created successfully (no user account - employee cannot log in)'
     });
   } catch (error) {
     console.error('Error creating employee:', error);
@@ -225,7 +258,7 @@ router.put(
   validate(employeeUpdateSchema),
   async (req, res) => {
   try {
-    const { name, email, phone, role, department, skills, hourlyRate, isActive, manager, address, emergencyContact } = req.data;
+    const { name, email, phone, role, department, skills, hourlyRate, isActive, manager, address, emergencyContact, password } = req.data;
 
     const employee = await Employee.findById(req.params.id);
     if (!employee) {
@@ -233,9 +266,10 @@ router.put(
     }
 
     // Check if email change conflicts with existing employee
-    if (email && email.toLowerCase() !== employee.email) {
+    const normalizedEmail = email ? email.toLowerCase() : employee.email;
+    if (email && normalizedEmail !== employee.email) {
       const existingEmployee = await Employee.findOne({
-        email: email.toLowerCase(),
+        email: normalizedEmail,
         _id: { $ne: req.params.id }
       });
       if (existingEmployee) {
@@ -243,9 +277,41 @@ router.put(
       }
     }
 
+    // Handle User account creation/update if password provided
+    let userCreated = false;
+    if (password) {
+      if (employee.user) {
+        // Update existing User account password
+        const user = await User.findById(employee.user);
+        if (user) {
+          user.password = password;
+          await user.save();
+        }
+      } else {
+        // Create new User account
+        const existingUser = await User.findOne({ email: normalizedEmail });
+        if (existingUser) {
+          // Link to existing User
+          employee.user = existingUser._id;
+        } else {
+          // Create new User
+          const userAccount = await User.create({
+            name: name || employee.name,
+            email: normalizedEmail,
+            password,
+            role: 'user',
+            company: req.user.company,
+            site: req.user.site
+          });
+          employee.user = userAccount._id;
+          userCreated = true;
+        }
+      }
+    }
+
     // Update employee fields
     if (name !== undefined) employee.name = name;
-    if (email !== undefined) employee.email = email.toLowerCase();
+    if (email !== undefined) employee.email = normalizedEmail;
     if (phone !== undefined) employee.phone = phone;
     if (role !== undefined) employee.role = role;
     if (department !== undefined) employee.department = department;
@@ -258,10 +324,18 @@ router.put(
 
     await employee.save();
     await employee.populate('manager', 'name email');
+    if (employee.user) {
+      await employee.populate('user', 'name email role');
+    }
 
     res.json({
       employee,
-      message: 'Employee updated successfully'
+      userCreated,
+      message: password && userCreated 
+        ? 'Employee updated and user account created successfully' 
+        : password && !userCreated
+        ? 'Employee updated and user password updated successfully'
+        : 'Employee updated successfully'
     });
   } catch (error) {
     console.error('Error updating employee:', error);

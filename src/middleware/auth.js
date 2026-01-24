@@ -11,7 +11,15 @@ const authenticateToken = (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded;
     return next();
-  } catch (_err) {
+  } catch (err) {
+    // Log the actual error for debugging (but don't expose sensitive details to client)
+    console.error('JWT verification failed:', {
+      name: err.name,
+      message: err.message,
+      path: req.path,
+      // Only log in development
+      ...(process.env.NODE_ENV !== 'production' && { fullError: err.toString() })
+    });
     return res.status(401).json({ message: 'Invalid token' });
   }
 };

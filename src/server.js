@@ -51,6 +51,7 @@ const { router: deviceRoutes } = require('./routes/devices');
 const telemetryRoutes = require('./routes/telemetry');
 const contractRoutes = require('./routes/contracts');
 const inventoryRoutes = require('./routes/inventory');
+const taskRoutes = require('./routes/tasks');
 const { initializeScheduledJobs } = require('./utils/scheduler');
 
 const app = express();
@@ -146,6 +147,7 @@ app.use('/api/devices', deviceRoutes);
 app.use('/api/telemetry', telemetryRoutes);
 app.use('/api/contracts', contractRoutes);
 app.use('/api/inventory', inventoryRoutes);
+app.use('/api/tasks', taskRoutes);
 
 app.use((err, _req, res, _next) => {
   // Generic error handler to avoid leaking details

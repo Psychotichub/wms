@@ -68,6 +68,10 @@ const employeeSchema = new mongoose.Schema({
     averageTaskTime: { type: Number, default: 0 }, // in minutes
     efficiencyRating: { type: Number, default: 0, min: 0, max: 5 },
     totalHoursWorked: { type: Number, default: 0 }
+  },
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
   }
 }, {
   timestamps: true
@@ -77,6 +81,7 @@ const employeeSchema = new mongoose.Schema({
 employeeSchema.index({ role: 1 });
 employeeSchema.index({ isActive: 1 });
 employeeSchema.index({ department: 1 });
+employeeSchema.index({ user: 1 }, { sparse: true });
 
 // Virtual for full name (if needed for future extensions)
 employeeSchema.virtual('fullName').get(function() {
