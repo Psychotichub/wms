@@ -77,11 +77,27 @@ const isAllowedLocalhostOrigin = (origin) => {
   if (!origin) return true; // allow native / server-to-server
   try {
     const url = new URL(origin);
-    return (
-      url.hostname === 'localhost' ||
-      url.hostname === '127.0.0.1' ||
-      url.hostname === '10.0.2.2'
-    );
+    const hostname = url.hostname;
+    
+    // Allow localhost variants
+    if (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '10.0.2.2'
+    ) {
+      return true;
+    }
+    
+    // Allow Expo web build URLs (expo.app, exp.direct, etc.)
+    if (
+      hostname.includes('.expo.app') ||
+      hostname.includes('.exp.direct') ||
+      hostname.includes('expo.dev')
+    ) {
+      return true;
+    }
+    
+    return false;
   } catch {
     return false;
   }
