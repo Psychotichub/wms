@@ -97,6 +97,7 @@ notificationSchema.index({ type: 1, createdAt: -1 });
 notificationSchema.index({ status: 1 });
 notificationSchema.index({ scheduledFor: 1 });
 notificationSchema.index({ expiresAt: 1 });
+notificationSchema.index({ 'data.taskId': 1, type: 1, createdAt: -1 }); // For deadline notification lookups
 
 // Virtual for isRead
 notificationSchema.virtual('isRead').get(function() {
@@ -128,6 +129,11 @@ notificationSchema.methods.markAsDelivered = function(response = null) {
 notificationSchema.statics.createAndSend = async function(notificationData) {
   const notification = new this(notificationData);
   await notification.save();
+
+  // If notification is scheduled for a future time, don't send immediately
+  if (notification.scheduledFor && new Date(notification.scheduledFor) > new Date()) {
+    return notification; // Return without sending, will be processed by scheduled notification processor
+  }
 
   // If push token is available, send push notification
   if (notification.pushToken) {
@@ -170,6 +176,66 @@ notificationSchema.statics.createAndSend = async function(notificationData) {
   }
 
   return notification;
+};
+
+// Static method to process scheduled notifications that are ready to be sent
+notificationSchema.statics.processScheduledNotifications = async function() {
+  const now = new Date();
+  const scheduledNotifications = await this.find({
+    scheduledFor: { $exists: true, $lte: now },
+    status: 'sent' // Only process notifications that haven't been sent yet
+  }).limit(100); // Process in batches
+
+  let processed = 0;
+  for (const notification of scheduledNotifications) {
+    try {
+      // If push token is available, send push notification
+      if (notification.pushToken) {
+        try {
+          const tickets = await sendExpoPushNotification({
+            to: notification.pushToken,
+            title: notification.title,
+            body: notification.message,
+            data: {
+              notificationId: notification._id,
+              type: notification.type,
+              ...notification.data
+            }
+          });
+          await notification.markAsDelivered(tickets);
+        } catch (error) {
+          console.error(`Failed to send scheduled push notification ${notification._id}:`, error);
+        }
+      }
+
+      // If web push subscription is available, send web push notification
+      if (notification.webPushSubscription) {
+        try {
+          const payload = JSON.stringify({
+            notificationId: String(notification._id),
+            title: notification.title,
+            message: notification.message,
+            type: notification.type,
+            data: notification.data || {},
+          });
+          const resp = await sendWebPushNotification({
+            subscription: notification.webPushSubscription,
+            payload,
+          });
+          notification.webPushResponse = resp;
+          await notification.save();
+        } catch (error) {
+          console.error(`Failed to send scheduled web push notification ${notification._id}:`, error);
+        }
+      }
+
+      processed++;
+    } catch (error) {
+      console.error(`Error processing scheduled notification ${notification._id}:`, error);
+    }
+  }
+
+  return { processed, total: scheduledNotifications.length };
 };
 
 // Static method to get user notifications
