@@ -36,6 +36,42 @@ const attendanceHistoryQuerySchema = z.object({
   locationId: z.string().optional()
 });
 
+// Get all locations for the organization (Admin only, includes inactive)
+router.get('/', authenticateToken, requireActiveSite, requireAdmin, async (req, res) => {
+  try {
+    const orgId = req.user.organizationId || req.user.company || req.user.site;
+    const locations = await Location.find({
+      organizationId: orgId
+    })
+      .select('name coordinates address type radius center isActive createdAt updatedAt')
+      .populate('createdBy', 'name email')
+      .sort({ createdAt: -1 });
+
+    // Format for frontend consumption
+    const formattedLocations = locations.map(location => ({
+      id: location._id,
+      name: location.name,
+      address: location.address,
+      coordinates: location.coordinates,
+      type: location.type,
+      radius: location.radius,
+      center: location.center,
+      isActive: location.isActive,
+      createdAt: location.createdAt,
+      updatedAt: location.updatedAt,
+      createdBy: location.createdBy ? {
+        name: location.createdBy.name,
+        email: location.createdBy.email
+      } : null
+    }));
+
+    res.json({ locations: formattedLocations, success: true });
+  } catch (error) {
+    console.error('Error fetching locations:', error);
+    res.status(500).json({ error: 'Failed to fetch locations', success: false });
+  }
+});
+
 // Get all geofences for the organization
 router.get('/geofences', authenticateToken, requireActiveSite, async (req, res) => {
   try {
@@ -223,8 +259,9 @@ router.put(
 // Delete a location (Admin only)
 router.delete('/:id', authenticateToken, requireActiveSite, requireAdmin, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
   try {
+    const orgId = req.user.organizationId || req.user.company || req.user.site;
     const location = await Location.findOneAndUpdate(
-      { _id: req.params.id, organizationId: req.user.organizationId },
+      { _id: req.params.id, organizationId: orgId },
       { isActive: false },
       { new: true }
     );

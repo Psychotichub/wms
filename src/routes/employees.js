@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
 const Location = require('../models/Location');
@@ -131,6 +132,156 @@ router.get('/', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('Error fetching employees:', error);
     res.status(500).json({ error: 'Failed to fetch employees' });
+  }
+});
+
+// GET /api/employees/active-locations - Get all active employees with their clock-in locations (for map view)
+// NOTE: This route must be defined BEFORE /:id to avoid route conflicts
+router.get('/active-locations', requireAuth, async (req, res) => {
+  try {
+    const company = req.user?.company;
+    const site = req.user?.site;
+    
+    if (!company) {
+      return res.status(400).json({ 
+        error: 'Company not found in user token', 
+        success: false 
+      });
+    }
+    
+    // Get all active attendance records with location data
+    // Note: The employee field in Attendance actually stores User IDs, not Employee IDs
+    const activeAttendances = await Attendance.find({
+      status: 'active',
+      'location.latitude': { $exists: true, $ne: null },
+      'location.longitude': { $exists: true, $ne: null }
+    })
+      .select('employee clockInTime location')
+      .lean();
+
+    // Get unique user IDs from attendances
+    // Note: With .lean(), ObjectIds are returned as instances, but we need to handle both cases
+    const userIds = [...new Set(activeAttendances
+      .map(a => {
+        if (!a.employee) return null;
+        try {
+          // If it's already an ObjectId instance, use it directly
+          if (a.employee instanceof mongoose.Types.ObjectId) {
+            return a.employee;
+          }
+          // If it's a string, convert to ObjectId
+          if (typeof a.employee === 'string' && mongoose.Types.ObjectId.isValid(a.employee)) {
+            return new mongoose.Types.ObjectId(a.employee);
+          }
+          // If it has a toString method, try converting
+          const idString = String(a.employee);
+          if (mongoose.Types.ObjectId.isValid(idString)) {
+            return new mongoose.Types.ObjectId(idString);
+          }
+          return null;
+        } catch (err) {
+          console.warn('Error processing employee ID:', err);
+          return null;
+        }
+      })
+      .filter(Boolean)
+    )];
+
+    if (userIds.length === 0) {
+      return res.json({
+        locations: [],
+        count: 0,
+        success: true
+      });
+    }
+
+    // Build organization filter - match users by company and optionally by site
+    let orgFilter = { 
+      _id: { $in: userIds },
+      company 
+    };
+    
+    if (site) {
+      // Add site filtering: users with matching site, no site, or site in sites array
+      orgFilter.$or = [
+        { site: site },
+        { site: null }, // Users without a specific site can belong to any site in the company
+        { sites: { $in: [site] } } // Users with multiple sites
+      ];
+    }
+
+    // Fetch user data for all users in this organization
+    let users;
+    try {
+      users = await User.find(orgFilter)
+        .select('name email role')
+        .lean();
+    } catch (queryError) {
+      console.error('Error querying users:', queryError);
+      console.error('Query filter:', JSON.stringify(orgFilter, null, 2));
+      throw queryError;
+    }
+
+    // Create a map of user ID to user data
+    const userMap = new Map(users.map(u => [u._id.toString(), u]));
+    
+    // Get only user IDs that belong to this organization
+    const orgUserIds = new Set(users.map(u => u._id.toString()));
+
+    // Filter and map attendance records to location data (only for users in this organization)
+    const employeeLocations = activeAttendances
+      .filter(attendance => {
+        if (!attendance.employee || !attendance.location?.latitude || !attendance.location?.longitude) {
+          return false;
+        }
+        
+        // Convert employee ID to string for comparison
+        const userId = attendance.employee.toString ? attendance.employee.toString() : String(attendance.employee);
+        return userId && orgUserIds.has(userId);
+      })
+      .map(attendance => {
+        const userId = attendance.employee.toString ? attendance.employee.toString() : String(attendance.employee);
+        const user = userMap.get(userId);
+        
+        // Handle date conversion safely
+        let elapsedTime = 0;
+        try {
+          if (attendance.clockInTime) {
+            const clockInTime = attendance.clockInTime instanceof Date 
+              ? attendance.clockInTime 
+              : new Date(attendance.clockInTime);
+            elapsedTime = Date.now() - clockInTime.getTime();
+          }
+        } catch (dateError) {
+          console.warn('Error calculating elapsed time:', dateError);
+        }
+        
+        return {
+          employeeId: userId || null,
+          employeeName: user?.name || 'Unknown',
+          employeeRole: user?.role || 'user',
+          latitude: attendance.location.latitude,
+          longitude: attendance.location.longitude,
+          locationName: attendance.location.locationName || 'Unknown Location',
+          checkInTime: attendance.clockInTime,
+          elapsedTime: elapsedTime
+        };
+      })
+      .filter(loc => loc.employeeId !== null); // Remove any with invalid user IDs
+
+    res.json({
+      locations: employeeLocations,
+      count: employeeLocations.length,
+      success: true
+    });
+  } catch (error) {
+    console.error('Error fetching active employee locations:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ 
+      error: 'Failed to fetch active employee locations', 
+      success: false,
+      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+    });
   }
 });
 
@@ -755,77 +906,6 @@ router.get('/attendance/current', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('Error fetching current attendance:', error);
     res.status(500).json({ error: 'Failed to fetch current attendance', success: false });
-  }
-});
-
-// GET /api/employees/active-locations - Get all active employees with their clock-in locations (for map view)
-router.get('/active-locations', requireAuth, async (req, res) => {
-  try {
-    const orgId = req.user.organizationId || req.user.company || req.user.site;
-    
-    // Get all active attendance records with location data
-    // Note: The employee field in Attendance actually stores User IDs, not Employee IDs
-    const activeAttendances = await Attendance.find({
-      status: 'active',
-      'location.latitude': { $exists: true, $ne: null },
-      'location.longitude': { $exists: true, $ne: null }
-    })
-      .select('employee clockInTime location')
-      .lean();
-
-    // Get unique user IDs from attendances
-    const userIds = [...new Set(activeAttendances
-      .map(a => a.employee)
-      .filter(Boolean)
-      .map(id => id.toString())
-    )];
-
-    // Fetch user data for all users
-    const User = require('../models/User');
-    const users = await User.find({ _id: { $in: userIds } })
-      .select('name email role')
-      .lean();
-
-    // Create a map of user ID to user data
-    const userMap = new Map(users.map(u => [u._id.toString(), u]));
-
-    // Filter and map attendance records to location data
-    const employeeLocations = activeAttendances
-      .filter(attendance => {
-        // Must have location data and valid employee/user reference
-        return attendance.location?.latitude && 
-               attendance.location?.longitude &&
-               attendance.employee;
-      })
-      .map(attendance => {
-        const userId = attendance.employee?.toString() || attendance.employee?._id?.toString();
-        const user = userId ? userMap.get(userId) : null;
-        
-        return {
-          employeeId: userId || null,
-          employeeName: user?.name || 'Unknown',
-          employeeRole: user?.role || 'user',
-          latitude: attendance.location.latitude,
-          longitude: attendance.location.longitude,
-          locationName: attendance.location.locationName || 'Unknown Location',
-          checkInTime: attendance.clockInTime,
-          elapsedTime: Date.now() - new Date(attendance.clockInTime).getTime()
-        };
-      })
-      .filter(loc => loc.employeeId !== null); // Remove any with invalid user IDs
-
-    res.json({
-      locations: employeeLocations,
-      count: employeeLocations.length,
-      success: true
-    });
-  } catch (error) {
-    console.error('Error fetching active employee locations:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch active employee locations', 
-      success: false,
-      details: error.message 
-    });
   }
 });
 
