@@ -284,9 +284,14 @@ router.delete('/:id', authenticateToken, requireActiveSite, requireAdmin, valida
 router.get('/attendance/history', authenticateToken, requireActiveSite, validate(attendanceHistoryQuerySchema, { source: 'query' }), async (req, res) => {
   try {
     const { startDate, endDate, locationId } = req.data;
+    const userId = req.user.id || req.user._id || req.user.userId;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated', success: false });
+    }
 
     let query = {
-      employee: req.user.userId
+      employee: userId
     };
 
     if (startDate && endDate) {
@@ -306,17 +311,18 @@ router.get('/attendance/history', authenticateToken, requireActiveSite, validate
       .limit(100);
 
     const formattedRecords = attendanceRecords.map(record => ({
-      id: record._id,
+      id: record._id.toString(),
       date: record.date,
       clockInTime: record.clockInTime,
       clockOutTime: record.clockOutTime,
       totalHours: record.totalHours,
       location: {
-        name: record.location?.locationName || record.location?.locationId?.name,
-        address: record.location?.address || record.location?.locationId?.address,
+        locationName: record.location?.locationName || record.location?.locationId?.name || 'Unknown Location',
+        locationId: record.location?.locationId?._id?.toString() || record.location?.locationId?.toString() || null,
+        address: record.location?.address || record.location?.locationId?.address || null,
         latitude: record.location?.latitude,
         longitude: record.location?.longitude,
-        geofenceTriggered: record.location?.geofenceTriggered
+        geofenceTriggered: record.location?.geofenceTriggered || false
       },
       status: record.status,
       notes: record.notes

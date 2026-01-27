@@ -69,6 +69,36 @@ const employeeSchema = new mongoose.Schema({
     efficiencyRating: { type: Number, default: 0, min: 0, max: 5 },
     totalHoursWorked: { type: Number, default: 0 }
   },
+  locationPreferences: {
+    selectedGeofences: [{
+      geofenceId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Location',
+        required: true
+      },
+      isDefault: {
+        type: Boolean,
+        default: false
+      },
+      addedAt: {
+        type: Date,
+        default: Date.now
+      }
+    }],
+    workingHours: [{
+      startTime: { type: String, required: true },
+      endTime: { type: String, required: true },
+      isDefault: {
+        type: Boolean,
+        default: false
+      },
+      addedAt: {
+        type: Date,
+        default: Date.now
+      }
+    }],
+    lastUpdated: { type: Date, default: Date.now }
+  },
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'

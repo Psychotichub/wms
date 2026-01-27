@@ -67,6 +67,14 @@ const geofenceCheckOutSchema = z.object({
   timestamp: z.string().optional()
 });
 
+const locationPreferencesSchema = z.object({
+  selectedGeofenceId: z.string().optional().nullable(), // For backward compatibility and simple selection
+  workingHours: z.object({
+    startTime: z.string().optional(),
+    endTime: z.string().optional()
+  }).optional()
+});
+
 // Middleware to check if user has admin/manager permissions
 const requireManager = (req, res, next) => {
   // This should check user role from your auth system
@@ -282,6 +290,253 @@ router.get('/active-locations', requireAuth, async (req, res) => {
       success: false,
       details: process.env.NODE_ENV !== 'production' ? error.message : undefined
     });
+  }
+});
+
+// GET /api/employees/preferences - Get current user's location preferences
+// NOTE: This route must be defined BEFORE /:id to avoid route conflicts
+router.get('/preferences', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
+    const userRole = req.user?.role;
+    const userEmail = req.user?.email;
+    const userName = req.user?.name;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    // Get or create Employee record
+    const employee = await getOrCreateEmployeeForUser(userId, userRole, userEmail, userName);
+    
+    if (!employee) {
+      return res.status(404).json({ 
+        error: 'Employee record not found. Please ensure your user account is linked to an employee record.' 
+      });
+    }
+
+    // Initialize locationPreferences if it doesn't exist
+    if (!employee.locationPreferences) {
+      employee.locationPreferences = {
+        selectedGeofences: [],
+        workingHours: [],
+        lastUpdated: new Date()
+      };
+    }
+
+    // Initialize workingHours array if it doesn't exist (for backward compatibility)
+    if (!employee.locationPreferences.workingHours || !Array.isArray(employee.locationPreferences.workingHours)) {
+      employee.locationPreferences.workingHours = [];
+    }
+
+    // Find the default location (isDefault: true) or return null
+    const defaultLocation = employee.locationPreferences.selectedGeofences?.find(
+      loc => loc.isDefault === true
+    ) || null;
+
+    // Find the default working hours (isDefault: true) or return default values
+    const defaultWorkingHours = employee.locationPreferences.workingHours?.find(
+      wh => wh.isDefault === true
+    ) || { startTime: '08:00', endTime: '16:30' };
+
+    res.json({
+      preferences: {
+        selectedGeofenceId: defaultLocation?.geofenceId 
+          ? defaultLocation.geofenceId.toString() 
+          : null,
+        selectedGeofences: employee.locationPreferences.selectedGeofences?.map(loc => ({
+          geofenceId: loc.geofenceId.toString(),
+          isDefault: loc.isDefault,
+          addedAt: loc.addedAt
+        })) || [],
+        workingHours: {
+          startTime: defaultWorkingHours.startTime,
+          endTime: defaultWorkingHours.endTime
+        },
+        workingHoursList: employee.locationPreferences.workingHours?.map(wh => ({
+          startTime: wh.startTime,
+          endTime: wh.endTime,
+          isDefault: wh.isDefault,
+          addedAt: wh.addedAt
+        })) || []
+      },
+      success: true
+    });
+  } catch (error) {
+    console.error('Error fetching location preferences:', error);
+    res.status(500).json({ error: 'Failed to fetch location preferences' });
+  }
+});
+
+// PUT /api/employees/preferences - Update location preferences
+// NOTE: This route must be defined BEFORE /:id to avoid route conflicts
+router.put('/preferences', requireAuth, validate(locationPreferencesSchema), async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
+    const userRole = req.user?.role;
+    const userEmail = req.user?.email;
+    const userName = req.user?.name;
+    const { selectedGeofenceId, workingHours } = req.data;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    // Get or create Employee record
+    const employee = await getOrCreateEmployeeForUser(userId, userRole, userEmail, userName);
+    
+    if (!employee) {
+      return res.status(404).json({ 
+        error: 'Employee record not found. Please ensure your user account is linked to an employee record.' 
+      });
+    }
+
+    // Initialize locationPreferences if it doesn't exist
+    if (!employee.locationPreferences) {
+      employee.locationPreferences = {
+        selectedGeofences: [],
+        workingHours: [],
+        lastUpdated: new Date()
+      };
+    }
+
+    // Initialize selectedGeofences array if it doesn't exist
+    if (!employee.locationPreferences.selectedGeofences) {
+      employee.locationPreferences.selectedGeofences = [];
+    }
+
+    // Initialize workingHours array if it doesn't exist (for backward compatibility)
+    if (!employee.locationPreferences.workingHours || !Array.isArray(employee.locationPreferences.workingHours)) {
+      employee.locationPreferences.workingHours = [];
+    }
+
+    // Update selectedGeofenceId if provided (replace default location)
+    if (selectedGeofenceId !== undefined) {
+      if (selectedGeofenceId) {
+        // Validate that the geofence exists and belongs to the organization
+        const orgId = req.user.organizationId || req.user.company || req.user.site;
+        const location = await Location.findOne({
+          _id: selectedGeofenceId,
+          organizationId: orgId,
+          isActive: true
+        });
+
+        if (!location) {
+          return res.status(400).json({ 
+            error: 'Invalid location. The selected location does not exist or is not accessible.' 
+          });
+        }
+
+        // Check if this location already exists in the array
+        const existingIndex = employee.locationPreferences.selectedGeofences.findIndex(
+          loc => loc.geofenceId.toString() === selectedGeofenceId.toString()
+        );
+
+        if (existingIndex >= 0) {
+          // Location exists, just set it as default
+          // Remove default flag from all locations
+          employee.locationPreferences.selectedGeofences.forEach(loc => {
+            loc.isDefault = false;
+          });
+          // Set this one as default
+          employee.locationPreferences.selectedGeofences[existingIndex].isDefault = true;
+        } else {
+          // New location - remove default flag from all existing locations
+          employee.locationPreferences.selectedGeofences.forEach(loc => {
+            loc.isDefault = false;
+          });
+          // Add new location as default (replaces the previous default)
+          employee.locationPreferences.selectedGeofences.push({
+            geofenceId: selectedGeofenceId,
+            isDefault: true,
+            addedAt: new Date()
+          });
+        }
+      } else {
+        // If selectedGeofenceId is null, remove default flag from all locations
+        employee.locationPreferences.selectedGeofences.forEach(loc => {
+          loc.isDefault = false;
+        });
+      }
+    }
+
+    // Update workingHours if provided (replace default working hours)
+    if (workingHours && workingHours.startTime && workingHours.endTime) {
+      // Check if this working hours combination already exists in the array
+      const existingIndex = employee.locationPreferences.workingHours.findIndex(
+        wh => wh.startTime === workingHours.startTime && wh.endTime === workingHours.endTime
+      );
+
+      if (existingIndex >= 0) {
+        // Working hours exist, just set it as default
+        // Remove default flag from all working hours
+        employee.locationPreferences.workingHours.forEach(wh => {
+          wh.isDefault = false;
+        });
+        // Set this one as default
+        employee.locationPreferences.workingHours[existingIndex].isDefault = true;
+      } else {
+        // New working hours - remove default flag from all existing working hours
+        employee.locationPreferences.workingHours.forEach(wh => {
+          wh.isDefault = false;
+        });
+        // Add new working hours as default (replaces the previous default)
+        employee.locationPreferences.workingHours.push({
+          startTime: workingHours.startTime,
+          endTime: workingHours.endTime,
+          isDefault: true,
+          addedAt: new Date()
+        });
+      }
+    }
+
+    // Update lastUpdated timestamp
+    employee.locationPreferences.lastUpdated = new Date();
+
+    await employee.save();
+
+    // Find the default location for response
+    const defaultLocation = employee.locationPreferences.selectedGeofences?.find(
+      loc => loc.isDefault === true
+    ) || null;
+
+    // Find the default working hours for response
+    const defaultWorkingHours = employee.locationPreferences.workingHours?.find(
+      wh => wh.isDefault === true
+    ) || { startTime: '08:00', endTime: '16:30' };
+
+    res.json({
+      preferences: {
+        selectedGeofenceId: defaultLocation?.geofenceId 
+          ? defaultLocation.geofenceId.toString() 
+          : null,
+        selectedGeofences: employee.locationPreferences.selectedGeofences?.map(loc => ({
+          geofenceId: loc.geofenceId.toString(),
+          isDefault: loc.isDefault,
+          addedAt: loc.addedAt
+        })) || [],
+        workingHours: {
+          startTime: defaultWorkingHours.startTime,
+          endTime: defaultWorkingHours.endTime
+        },
+        workingHoursList: employee.locationPreferences.workingHours?.map(wh => ({
+          startTime: wh.startTime,
+          endTime: wh.endTime,
+          isDefault: wh.isDefault,
+          addedAt: wh.addedAt
+        })) || []
+      },
+      success: true,
+      message: 'Location preferences updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating location preferences:', error);
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(500).json({ error: 'Failed to update location preferences' });
   }
 });
 
@@ -742,6 +997,32 @@ router.post('/attendance/checkin', requireAuth, validate(geofenceCheckInSchema),
 
     await attendance.save();
 
+    // Send notification to user about check-in
+    try {
+      const Employee = require('../models/Employee');
+      const NotificationPreferences = require('../models/NotificationPreferences');
+      const employee = await Employee.findById(userId);
+      if (employee) {
+        await NotificationPreferences.sendNotificationIfAllowed(employee._id, {
+          recipient: employee._id,
+          sender: userId,
+          title: 'Checked In',
+          message: `You have successfully checked in to ${locationName}.`,
+          type: 'attendance_checkin',
+          priority: 'medium',
+          data: {
+            attendanceId: attendance._id.toString(),
+            locationId: locationId || null,
+            locationName: locationName,
+            checkInTime: checkInTime.toISOString()
+          }
+        });
+      }
+    } catch (notifyError) {
+      console.error('Failed to send check-in notification:', notifyError);
+      // Don't fail the check-in if notification fails
+    }
+
     res.status(201).json({
       attendance: {
         id: attendance._id,
@@ -800,6 +1081,33 @@ router.post('/attendance/checkout', requireAuth, validate(geofenceCheckOutSchema
 
     await attendance.clockOut();
     await attendance.populate('employee', 'name email');
+
+    // Send notification to user about check-out
+    try {
+      const NotificationPreferences = require('../models/NotificationPreferences');
+      const locationName = attendance.location?.locationName || 'the location';
+      const totalHours = attendance.totalHours || 0;
+      const hoursText = totalHours > 0 ? ` (${totalHours.toFixed(1)} hours)` : '';
+      
+      await NotificationPreferences.sendNotificationIfAllowed(userId, {
+        recipient: userId,
+        sender: userId,
+        title: 'Checked Out',
+        message: `You have successfully checked out from ${locationName}${hoursText}.`,
+        type: 'attendance_checkout',
+        priority: 'medium',
+        data: {
+          attendanceId: attendance._id.toString(),
+          locationId: attendance.location?.locationId || null,
+          locationName: locationName,
+          checkOutTime: attendance.clockOutTime?.toISOString() || new Date().toISOString(),
+          totalHours: totalHours
+        }
+      });
+    } catch (notifyError) {
+      console.error('Failed to send check-out notification:', notifyError);
+      // Don't fail the check-out if notification fails
+    }
 
     // Notify user if no daily report was created for today (once per day)
     try {
@@ -991,5 +1299,301 @@ async function validateLocationData({ latitude, longitude, accuracy, speed, alti
 
   return validation;
 }
+
+// Helper function to get or create Employee record for a user
+// Similar to the one in notifications.js
+const getOrCreateEmployeeForUser = async (userId, userRole, userEmail, userName) => {
+  let employee = await Employee.findOne({ user: userId });
+  
+  if (!employee) {
+    // If user is admin, try to find or create Employee record
+    if (userRole === 'admin') {
+      const normalizedEmail = userEmail ? userEmail.toLowerCase().trim() : null;
+      
+      // First, check if an Employee with this email already exists
+      if (normalizedEmail) {
+        const existingEmployee = await Employee.findOne({ email: normalizedEmail });
+        if (existingEmployee) {
+          // If Employee exists but isn't linked to this user, link it
+          if (!existingEmployee.user) {
+            existingEmployee.user = userId;
+            await existingEmployee.save();
+            return existingEmployee;
+          }
+          // If Employee is linked to a different user, use it anyway (might be shared admin account)
+          if (existingEmployee.user.toString() !== userId.toString()) {
+            return existingEmployee;
+          }
+        }
+      }
+      
+      // No existing Employee found, create a new one
+      try {
+        employee = await Employee.create({
+          name: userName || 'Admin User',
+          email: normalizedEmail || `admin-${userId}@system.local`,
+          role: 'admin',
+          user: userId,
+          isActive: true
+        });
+      } catch (error) {
+        // If creation fails due to duplicate email, try to find and link existing Employee
+        if (error.code === 11000 && error.keyPattern?.email) {
+          const existingEmployee = await Employee.findOne({ email: normalizedEmail || `admin-${userId}@system.local` });
+          if (existingEmployee) {
+            // Link existing Employee to this user if not already linked
+            if (!existingEmployee.user) {
+              existingEmployee.user = userId;
+              await existingEmployee.save();
+              return existingEmployee;
+            }
+            // Return existing Employee even if linked to different user
+            return existingEmployee;
+          }
+        }
+        // Re-throw if it's not a duplicate key error
+        throw error;
+      }
+    } else {
+      // Non-admin users must have Employee records
+      return null;
+    }
+  }
+  
+  return employee;
+};
+
+// GET /api/employees/:id/preferences - Get employee location preferences (Admin only)
+router.get('/:id/preferences', requireAuth, requireManager, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
+  try {
+    const employeeId = req.params.id;
+
+    const employee = await Employee.findById(employeeId);
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    // Initialize locationPreferences if it doesn't exist
+    if (!employee.locationPreferences) {
+      employee.locationPreferences = {
+        selectedGeofences: [],
+        workingHours: [],
+        lastUpdated: new Date()
+      };
+    }
+
+    // Initialize workingHours array if it doesn't exist (for backward compatibility)
+    if (!employee.locationPreferences.workingHours || !Array.isArray(employee.locationPreferences.workingHours)) {
+      employee.locationPreferences.workingHours = [];
+    }
+
+    // Find the default location (isDefault: true) or return null
+    const defaultLocation = employee.locationPreferences.selectedGeofences?.find(
+      loc => loc.isDefault === true
+    ) || null;
+
+    // Find the default working hours (isDefault: true) or return default values
+    const defaultWorkingHours = employee.locationPreferences.workingHours?.find(
+      wh => wh.isDefault === true
+    ) || { startTime: '08:00', endTime: '16:30' };
+
+    res.json({
+      preferences: {
+        selectedGeofenceId: defaultLocation?.geofenceId 
+          ? defaultLocation.geofenceId.toString() 
+          : null,
+        selectedGeofences: employee.locationPreferences.selectedGeofences?.map(loc => ({
+          geofenceId: loc.geofenceId.toString(),
+          isDefault: loc.isDefault,
+          addedAt: loc.addedAt
+        })) || [],
+        workingHours: {
+          startTime: defaultWorkingHours.startTime,
+          endTime: defaultWorkingHours.endTime
+        },
+        workingHoursList: employee.locationPreferences.workingHours?.map(wh => ({
+          startTime: wh.startTime,
+          endTime: wh.endTime,
+          isDefault: wh.isDefault,
+          addedAt: wh.addedAt
+        })) || []
+      },
+      employee: {
+        id: employee._id,
+        name: employee.name,
+        email: employee.email
+      },
+      success: true
+    });
+  } catch (error) {
+    console.error('Error fetching employee location preferences:', error);
+    res.status(500).json({ error: 'Failed to fetch employee location preferences' });
+  }
+});
+
+// PUT /api/employees/:id/preferences - Update employee location preferences (Admin only)
+router.put('/:id/preferences', requireAuth, requireManager, validate(idParamsSchema, { source: 'params' }), validate(locationPreferencesSchema), async (req, res) => {
+  try {
+    const employeeId = req.params.id;
+    const { selectedGeofenceId, workingHours } = req.data;
+
+    const employee = await Employee.findById(employeeId);
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    // Initialize locationPreferences if it doesn't exist
+    if (!employee.locationPreferences) {
+      employee.locationPreferences = {
+        selectedGeofences: [],
+        workingHours: [],
+        lastUpdated: new Date()
+      };
+    }
+
+    // Initialize selectedGeofences array if it doesn't exist
+    if (!employee.locationPreferences.selectedGeofences) {
+      employee.locationPreferences.selectedGeofences = [];
+    }
+
+    // Initialize workingHours array if it doesn't exist (for backward compatibility)
+    if (!employee.locationPreferences.workingHours || !Array.isArray(employee.locationPreferences.workingHours)) {
+      employee.locationPreferences.workingHours = [];
+    }
+
+    // Update selectedGeofenceId if provided (replace default location)
+    if (selectedGeofenceId !== undefined) {
+      if (selectedGeofenceId) {
+        // Validate that the geofence exists and belongs to the organization
+        const orgId = req.user.organizationId || req.user.company || req.user.site;
+        const location = await Location.findOne({
+          _id: selectedGeofenceId,
+          organizationId: orgId,
+          isActive: true
+        });
+
+        if (!location) {
+          return res.status(400).json({ 
+            error: 'Invalid location. The selected location does not exist or is not accessible.' 
+          });
+        }
+
+        // Check if this location already exists in the array
+        const existingIndex = employee.locationPreferences.selectedGeofences.findIndex(
+          loc => loc.geofenceId.toString() === selectedGeofenceId.toString()
+        );
+
+        if (existingIndex >= 0) {
+          // Location exists, just set it as default
+          // Remove default flag from all locations
+          employee.locationPreferences.selectedGeofences.forEach(loc => {
+            loc.isDefault = false;
+          });
+          // Set this one as default
+          employee.locationPreferences.selectedGeofences[existingIndex].isDefault = true;
+        } else {
+          // New location - remove default flag from all existing locations
+          employee.locationPreferences.selectedGeofences.forEach(loc => {
+            loc.isDefault = false;
+          });
+          // Add new location as default (replaces the previous default)
+          employee.locationPreferences.selectedGeofences.push({
+            geofenceId: selectedGeofenceId,
+            isDefault: true,
+            addedAt: new Date()
+          });
+        }
+      } else {
+        // If selectedGeofenceId is null, remove default flag from all locations
+        employee.locationPreferences.selectedGeofences.forEach(loc => {
+          loc.isDefault = false;
+        });
+      }
+    }
+
+    // Update workingHours if provided (replace default working hours)
+    if (workingHours && workingHours.startTime && workingHours.endTime) {
+      // Check if this working hours combination already exists in the array
+      const existingIndex = employee.locationPreferences.workingHours.findIndex(
+        wh => wh.startTime === workingHours.startTime && wh.endTime === workingHours.endTime
+      );
+
+      if (existingIndex >= 0) {
+        // Working hours exist, just set it as default
+        // Remove default flag from all working hours
+        employee.locationPreferences.workingHours.forEach(wh => {
+          wh.isDefault = false;
+        });
+        // Set this one as default
+        employee.locationPreferences.workingHours[existingIndex].isDefault = true;
+      } else {
+        // New working hours - remove default flag from all existing working hours
+        employee.locationPreferences.workingHours.forEach(wh => {
+          wh.isDefault = false;
+        });
+        // Add new working hours as default (replaces the previous default)
+        employee.locationPreferences.workingHours.push({
+          startTime: workingHours.startTime,
+          endTime: workingHours.endTime,
+          isDefault: true,
+          addedAt: new Date()
+        });
+      }
+    }
+
+    // Update lastUpdated timestamp
+    employee.locationPreferences.lastUpdated = new Date();
+
+    await employee.save();
+
+    // Find the default location for response
+    const defaultLocation = employee.locationPreferences.selectedGeofences?.find(
+      loc => loc.isDefault === true
+    ) || null;
+
+    // Find the default working hours for response
+    const defaultWorkingHours = employee.locationPreferences.workingHours?.find(
+      wh => wh.isDefault === true
+    ) || { startTime: '08:00', endTime: '16:30' };
+
+    res.json({
+      preferences: {
+        selectedGeofenceId: defaultLocation?.geofenceId 
+          ? defaultLocation.geofenceId.toString() 
+          : null,
+        selectedGeofences: employee.locationPreferences.selectedGeofences?.map(loc => ({
+          geofenceId: loc.geofenceId.toString(),
+          isDefault: loc.isDefault,
+          addedAt: loc.addedAt
+        })) || [],
+        workingHours: {
+          startTime: defaultWorkingHours.startTime,
+          endTime: defaultWorkingHours.endTime
+        },
+        workingHoursList: employee.locationPreferences.workingHours?.map(wh => ({
+          startTime: wh.startTime,
+          endTime: wh.endTime,
+          isDefault: wh.isDefault,
+          addedAt: wh.addedAt
+        })) || []
+      },
+      employee: {
+        id: employee._id,
+        name: employee.name,
+        email: employee.email
+      },
+      success: true,
+      message: 'Employee location preferences updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating employee location preferences:', error);
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(500).json({ error: 'Failed to update employee location preferences' });
+  }
+});
 
 module.exports = router;
