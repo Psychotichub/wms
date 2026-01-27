@@ -29,7 +29,9 @@ const notificationPreferencesSchema = new mongoose.Schema({
     low_stock: { type: Boolean, default: true },
     daily_report_missing: { type: Boolean, default: true },
     contract_exceeded: { type: Boolean, default: true },
-    inventory_exceeded: { type: Boolean, default: true }
+    inventory_exceeded: { type: Boolean, default: true },
+    attendance_checkin: { type: Boolean, default: true },
+    attendance_checkout: { type: Boolean, default: true }
   },
   reminderSettings: {
     deadlineReminders: {

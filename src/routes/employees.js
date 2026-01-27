@@ -948,6 +948,37 @@ router.post('/attendance/checkin', requireAuth, validate(geofenceCheckInSchema),
       });
     }
 
+    // Check 6-hour cooldown period after checkout
+    const lastCheckout = await Attendance.findOne({
+      employee: userId,
+      status: 'completed',
+      clockOutTime: { $exists: true }
+    })
+      .sort({ clockOutTime: -1 })
+      .limit(1);
+
+    if (lastCheckout && lastCheckout.clockOutTime) {
+      const timeSinceCheckout = now - lastCheckout.clockOutTime;
+      const sixHoursInMs = 6 * 60 * 60 * 1000; // 6 hours in milliseconds
+      
+      if (timeSinceCheckout < sixHoursInMs) {
+        const remainingHours = ((sixHoursInMs - timeSinceCheckout) / (60 * 60 * 1000)).toFixed(1);
+        const checkoutTime = new Date(lastCheckout.clockOutTime);
+        const nextCheckInTime = new Date(checkoutTime.getTime() + sixHoursInMs);
+        
+        return res.status(403).json({
+          error: `You cannot check in until 6 hours have passed since your last checkout.`,
+          details: {
+            lastCheckoutTime: checkoutTime.toISOString(),
+            nextCheckInTime: nextCheckInTime.toISOString(),
+            remainingHours: parseFloat(remainingHours),
+            remainingMinutes: Math.ceil((sixHoursInMs - timeSinceCheckout) / (60 * 1000))
+          },
+          success: false
+        });
+      }
+    }
+
     // Validate location exists and user has access
     if (locationId) {
       const location = await Location.findOne({
@@ -1056,6 +1087,15 @@ router.post('/attendance/checkout', requireAuth, validate(geofenceCheckOutSchema
     const userId = req.user.id || req.user.userId;
     const _orgId = req.user.organizationId || req.user.company || req.user.site;
 
+    if (!userId) {
+      return res.status(401).json({
+        error: 'User not authenticated',
+        success: false
+      });
+    }
+
+    console.log('[Checkout] Finding attendance for user:', userId, 'date:', today);
+
     const attendance = await Attendance.findOne({
       employee: userId,
       date: today,
@@ -1063,47 +1103,66 @@ router.post('/attendance/checkout', requireAuth, validate(geofenceCheckOutSchema
     });
 
     if (!attendance) {
+      console.log('[Checkout] No active attendance found for user:', userId);
       return res.status(404).json({
         error: 'No active check-in found',
         success: false
       });
     }
 
-    // Update location info for check-out
-    if (locationId) {
-      attendance.location = {
-        ...attendance.location,
-        latitude,
-        longitude,
-        accuracy
-      };
+    console.log('[Checkout] Found attendance:', attendance._id);
+
+    // Update location info for check-out (only update coordinates, preserve rest)
+    if (latitude !== undefined && longitude !== undefined) {
+      // Use Mongoose's set method to update only specific fields, avoiding undefined issues
+      attendance.location.latitude = latitude;
+      attendance.location.longitude = longitude;
+      if (accuracy !== undefined) {
+        attendance.location.accuracy = accuracy;
+      }
+      // Mark the location field as modified so Mongoose saves it
+      attendance.markModified('location');
     }
 
+    console.log('[Checkout] Calling clockOut...');
     await attendance.clockOut();
+    console.log('[Checkout] clockOut completed, populating employee...');
     await attendance.populate('employee', 'name email');
+    console.log('[Checkout] Employee populated');
 
     // Send notification to user about check-out
     try {
       const NotificationPreferences = require('../models/NotificationPreferences');
-      const locationName = attendance.location?.locationName || 'the location';
-      const totalHours = attendance.totalHours || 0;
-      const hoursText = totalHours > 0 ? ` (${totalHours.toFixed(1)} hours)` : '';
+      const Employee = require('../models/Employee');
       
-      await NotificationPreferences.sendNotificationIfAllowed(userId, {
-        recipient: userId,
-        sender: userId,
-        title: 'Checked Out',
-        message: `You have successfully checked out from ${locationName}${hoursText}.`,
-        type: 'attendance_checkout',
-        priority: 'medium',
-        data: {
-          attendanceId: attendance._id.toString(),
-          locationId: attendance.location?.locationId || null,
-          locationName: locationName,
-          checkOutTime: attendance.clockOutTime?.toISOString() || new Date().toISOString(),
-          totalHours: totalHours
-        }
-      });
+      // Get Employee record for the user (notification preferences use Employee ID)
+      const employee = await Employee.findOne({ user: userId });
+      if (employee) {
+        const locationName = attendance.location?.locationName || 'the location';
+        const totalHours = attendance.totalHours || 0;
+        const hoursText = totalHours > 0 ? ` (${totalHours.toFixed(1)} hours)` : '';
+        
+        const checkoutTime = attendance.clockOutTime || new Date();
+        const nextCheckInTime = new Date(checkoutTime.getTime() + (6 * 60 * 60 * 1000)); // 6 hours from checkout
+        
+        await NotificationPreferences.sendNotificationIfAllowed(employee._id, {
+          recipient: employee._id,
+          sender: userId,
+          title: 'Checked Out',
+          message: `You have successfully checked out from ${locationName}${hoursText}. You cannot check in again until ${nextCheckInTime.toLocaleTimeString()} (6 hours from now).`,
+          type: 'attendance_checkout',
+          priority: 'medium',
+          data: {
+            attendanceId: attendance._id.toString(),
+            locationId: attendance.location?.locationId || null,
+            locationName: locationName,
+            checkOutTime: checkoutTime.toISOString(),
+            totalHours: totalHours,
+            nextCheckInTime: nextCheckInTime.toISOString(),
+            cooldownHours: 6
+          }
+        });
+      }
     } catch (notifyError) {
       console.error('Failed to send check-out notification:', notifyError);
       // Don't fail the check-out if notification fails
@@ -1165,6 +1224,7 @@ router.post('/attendance/checkout', requireAuth, validate(geofenceCheckOutSchema
       console.error('Failed to send daily report reminder:', notifyError);
     }
 
+    console.log('[Checkout] Checkout successful, sending response');
     res.json({
       attendance: {
         id: attendance._id,
@@ -1177,8 +1237,18 @@ router.post('/attendance/checkout', requireAuth, validate(geofenceCheckOutSchema
       message: 'Checked out successfully'
     });
   } catch (error) {
-    console.error('Error during geofence check-out:', error);
-    res.status(500).json({ error: 'Failed to check out', success: false });
+    console.error('[Checkout] Error during geofence check-out:', error);
+    console.error('[Checkout] Error stack:', error.stack);
+    console.error('[Checkout] Error details:', {
+      message: error.message,
+      name: error.name,
+      code: error.code
+    });
+    res.status(500).json({ 
+      error: 'Failed to check out', 
+      success: false,
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 

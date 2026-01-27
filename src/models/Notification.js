@@ -34,11 +34,13 @@ const notificationSchema = new mongoose.Schema({
       'system_announcement',
       'reminder',
       'overtime_alert',
-        'schedule_change',
-        'low_stock',
-        'daily_report_missing',
-        'contract_exceeded',
-        'inventory_exceeded'
+      'schedule_change',
+      'low_stock',
+      'daily_report_missing',
+      'contract_exceeded',
+      'inventory_exceeded',
+      'attendance_checkin',
+      'attendance_checkout'
     ],
     required: true
   },
