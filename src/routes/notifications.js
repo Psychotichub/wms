@@ -152,8 +152,32 @@ router.get('/', requireAuth, validate(notificationsQuerySchema, { source: 'query
 
     const employeeId = employee._id;
 
+    // If fetching notifications and user is online, mark pending notifications as delivered
+    // This ensures users see notifications they missed while offline
+    if (!status) {
+      const pendingNotifications = await Notification.find({
+        recipient: employeeId,
+        status: 'pending',
+        $or: [
+          { expiresAt: { $exists: false } },
+          { expiresAt: { $gt: new Date() } }
+        ]
+      }).limit(100);
+
+      // Mark pending notifications as delivered since user is now online and viewing them
+      if (pendingNotifications.length > 0) {
+        await Notification.updateMany(
+          { _id: { $in: pendingNotifications.map(n => n._id) } },
+          { $set: { status: 'delivered' } }
+        );
+      }
+    }
+
+    // Build query - by default include all unread notifications (pending, sent, delivered)
+    const queryStatus = status || { $nin: ['read', 'archived'] };
+
     const notifications = await Notification.getUserNotifications(employeeId, {
-      status,
+      status: queryStatus,
       type,
       limit: parseInt(limit),
       page: parseInt(page),
@@ -162,7 +186,7 @@ router.get('/', requireAuth, validate(notificationsQuerySchema, { source: 'query
 
     const total = await Notification.countDocuments({
       recipient: employeeId,
-      ...(status && { status }),
+      ...(status ? { status } : { status: { $nin: ['read', 'archived'] } }),
       ...(type && { type }),
       ...(!includeExpired || includeExpired !== 'true' ? {
         $or: [
@@ -172,10 +196,10 @@ router.get('/', requireAuth, validate(notificationsQuerySchema, { source: 'query
       } : {})
     });
 
-    // Get unread count
+    // Get unread count (include pending notifications as unread)
     const unreadCount = await Notification.countDocuments({
       recipient: employeeId,
-      status: { $ne: 'read' },
+      status: { $nin: ['read', 'archived'] }, // Include pending, sent, and delivered as unread
       $or: [
         { expiresAt: { $exists: false } },
         { expiresAt: { $gt: new Date() } }

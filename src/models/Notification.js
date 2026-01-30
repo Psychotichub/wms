@@ -51,8 +51,8 @@ const notificationSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['sent', 'delivered', 'read', 'archived'],
-    default: 'sent'
+    enum: ['pending', 'sent', 'delivered', 'read', 'archived'],
+    default: 'pending'
   },
   relatedEntity: {
     type: {
@@ -129,7 +129,11 @@ notificationSchema.methods.markAsDelivered = function(response = null) {
 
 // Static method to create and send notification
 notificationSchema.statics.createAndSend = async function(notificationData) {
-  const notification = new this(notificationData);
+  // Always create and save notification first (even if user is offline)
+  const notification = new this({
+    ...notificationData,
+    status: 'pending' // Start as pending until delivered
+  });
   await notification.save();
 
   // If notification is scheduled for a future time, don't send immediately
@@ -137,7 +141,9 @@ notificationSchema.statics.createAndSend = async function(notificationData) {
     return notification; // Return without sending, will be processed by scheduled notification processor
   }
 
-  // If push token is available, send push notification
+  let delivered = false;
+
+  // If push token is available, try to send push notification
   if (notification.pushToken) {
     try {
       const tickets = await sendExpoPushNotification({
@@ -151,12 +157,14 @@ notificationSchema.statics.createAndSend = async function(notificationData) {
         }
       });
       await notification.markAsDelivered(tickets);
+      delivered = true;
     } catch (error) {
-      console.error('Failed to send push notification:', error);
+      console.error('Failed to send push notification (user may be offline):', error);
+      // Keep status as 'pending' - will be delivered when user comes online
     }
   }
 
-  // If web push subscription is available, send web push notification
+  // If web push subscription is available, try to send web push notification
   if (notification.webPushSubscription) {
     try {
       const payload = JSON.stringify({
@@ -171,11 +179,20 @@ notificationSchema.statics.createAndSend = async function(notificationData) {
         payload,
       });
       notification.webPushResponse = resp;
-      await notification.save();
+      if (!delivered) {
+        await notification.markAsDelivered(resp);
+        delivered = true;
+      } else {
+        await notification.save();
+      }
     } catch (error) {
-      console.error('Failed to send web push notification:', error);
+      console.error('Failed to send web push notification (user may be offline):', error);
+      // Keep status as 'pending' - will be delivered when user comes online
     }
   }
+
+  // If neither push method worked, notification remains 'pending' for later delivery
+  // This ensures users get notifications when they come back online
 
   return notification;
 };
@@ -185,13 +202,15 @@ notificationSchema.statics.processScheduledNotifications = async function() {
   const now = new Date();
   const scheduledNotifications = await this.find({
     scheduledFor: { $exists: true, $lte: now },
-    status: 'sent' // Only process notifications that haven't been sent yet
+    status: { $in: ['pending', 'sent'] } // Process pending and sent notifications
   }).limit(100); // Process in batches
 
   let processed = 0;
   for (const notification of scheduledNotifications) {
     try {
-      // If push token is available, send push notification
+      let delivered = false;
+
+      // If push token is available, try to send push notification
       if (notification.pushToken) {
         try {
           const tickets = await sendExpoPushNotification({
@@ -205,12 +224,14 @@ notificationSchema.statics.processScheduledNotifications = async function() {
             }
           });
           await notification.markAsDelivered(tickets);
+          delivered = true;
         } catch (error) {
-          console.error(`Failed to send scheduled push notification ${notification._id}:`, error);
+          console.error(`Failed to send scheduled push notification ${notification._id} (user may be offline):`, error);
+          // Keep as pending for later delivery
         }
       }
 
-      // If web push subscription is available, send web push notification
+      // If web push subscription is available, try to send web push notification
       if (notification.webPushSubscription) {
         try {
           const payload = JSON.stringify({
@@ -225,12 +246,19 @@ notificationSchema.statics.processScheduledNotifications = async function() {
             payload,
           });
           notification.webPushResponse = resp;
-          await notification.save();
+          if (!delivered) {
+            await notification.markAsDelivered(resp);
+            delivered = true;
+          } else {
+            await notification.save();
+          }
         } catch (error) {
-          console.error(`Failed to send scheduled web push notification ${notification._id}:`, error);
+          console.error(`Failed to send scheduled web push notification ${notification._id} (user may be offline):`, error);
+          // Keep as pending for later delivery
         }
       }
 
+      // If neither method worked, notification remains 'pending' for later delivery
       processed++;
     } catch (error) {
       console.error(`Error processing scheduled notification ${notification._id}:`, error);
@@ -246,7 +274,15 @@ notificationSchema.statics.getUserNotifications = function(userId, options = {})
 
   const query = { recipient: userId };
 
-  if (status) query.status = status;
+  // Handle status - can be a string or an object (for $nin queries)
+  if (status) {
+    if (typeof status === 'object' && status.$nin) {
+      query.status = status;
+    } else {
+      query.status = status;
+    }
+  }
+  
   if (type) query.type = type;
   if (!includeExpired) {
     query.$or = [
