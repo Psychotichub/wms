@@ -44,7 +44,6 @@ backend/
 -   **Reports**: `/api/reports` - Daily work reports.
 -   **Materials**: `/api/materials` - Inventory and pricing.
 -   **Notifications**: `/api/notifications` - Push notifications for system events.
--   **Time Tracking**: `/api/time` - Task-based time logging.
 -   **Locations**: `/api/locations` - Geofence definitions for sites.
 
 ## ⚙️ Setup & Running
