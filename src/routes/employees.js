@@ -1125,7 +1125,7 @@ router.post('/attendance/checkout', requireAuth, validate(geofenceCheckOutSchema
     }
 
     console.log('[Checkout] Calling clockOut...');
-    await attendance.clockOut();
+    await attendance.clockOut(null, null, true); // true = manual checkout
     console.log('[Checkout] clockOut completed, populating employee...');
     await attendance.populate('employee', 'name email');
     console.log('[Checkout] Employee populated');
@@ -1285,10 +1285,16 @@ router.get('/attendance/current', requireAuth, async (req, res) => {
         .limit(1);
 
       if (lastCheckout && lastCheckout.clockOutTime) {
+        const checkoutTime = lastCheckout.clockOutTime;
+        const isManual = lastCheckout.isManualCheckout || false;
+        const nextCheckInTime = isManual ? new Date(checkoutTime.getTime() + (6 * 60 * 60 * 1000)) : null;
+        
         return res.json({
           isCheckedIn: false,
           isCheckedOut: true,
-          checkOutTime: lastCheckout.clockOutTime,
+          checkOutTime: checkoutTime,
+          isManualCheckout: isManual,
+          nextCheckInTime: nextCheckInTime,
           currentAttendance: null,
           success: true
         });

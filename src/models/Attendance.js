@@ -36,6 +36,10 @@ const attendanceSchema = new mongoose.Schema({
     enum: ['active', 'completed', 'on_break'],
     default: 'active'
   },
+  isManualCheckout: {
+    type: Boolean,
+    default: false
+  },
   location: {
     latitude: Number,
     longitude: Number,
@@ -127,9 +131,10 @@ attendanceSchema.methods.calculateTotalHours = function() {
 };
 
 // Method to clock out and calculate final hours
-attendanceSchema.methods.clockOut = function(location = null, notes = null) {
+attendanceSchema.methods.clockOut = function(location = null, notes = null, isManual = false) {
   this.clockOutTime = new Date();
   this.status = 'completed';
+  this.isManualCheckout = isManual;
 
   if (location) {
     this.location = location;
