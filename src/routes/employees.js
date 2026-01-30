@@ -1263,8 +1263,40 @@ router.get('/attendance/current', requireAuth, async (req, res) => {
     }).populate('employee', 'name email');
 
     if (!attendance) {
+      // Check if user has checked out today
+      // Use clockOutTime to determine if checkout was today (more reliable than date field)
+      // Use UTC to ensure consistent date comparison
+      const now = new Date();
+      const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+      const tomorrow = new Date(today);
+      tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+
+      // Find the most recent checkout where clockOutTime is from today (UTC)
+      const lastCheckout = await Attendance.findOne({
+        employee: userId,
+        status: 'completed',
+        clockOutTime: { 
+          $exists: true,
+          $gte: today,
+          $lt: tomorrow
+        }
+      })
+        .sort({ clockOutTime: -1 })
+        .limit(1);
+
+      if (lastCheckout && lastCheckout.clockOutTime) {
+        return res.json({
+          isCheckedIn: false,
+          isCheckedOut: true,
+          checkOutTime: lastCheckout.clockOutTime,
+          currentAttendance: null,
+          success: true
+        });
+      }
+
       return res.json({
         isCheckedIn: false,
+        isCheckedOut: false,
         currentAttendance: null,
         success: true
       });
@@ -1272,6 +1304,7 @@ router.get('/attendance/current', requireAuth, async (req, res) => {
 
     res.json({
       isCheckedIn: true,
+      isCheckedOut: false,
       currentAttendance: {
         id: attendance._id,
         checkInTime: attendance.clockInTime,

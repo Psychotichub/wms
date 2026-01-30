@@ -341,14 +341,48 @@ router.get('/attendance/history', authenticateToken, requireActiveSite, validate
 // Check if user is currently checked in at any location
 router.get('/attendance/current', authenticateToken, requireActiveSite, async (req, res) => {
   try {
+    const userId = req.user.userId;
+    
     const currentAttendance = await Attendance.findOne({
-      employee: req.user.userId,
+      employee: userId,
       status: 'active'
     }).populate('location.locationId', 'name address');
 
     if (!currentAttendance) {
+      // Check if user has checked out today
+      // Use clockOutTime to determine if checkout was today (more reliable than date field)
+      // Use UTC to ensure consistent date comparison
+      const now = new Date();
+      const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+      const tomorrow = new Date(today);
+      tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+
+      // Find the most recent checkout where clockOutTime is from today (UTC)
+      const lastCheckout = await Attendance.findOne({
+        employee: userId,
+        status: 'completed',
+        clockOutTime: { 
+          $exists: true,
+          $gte: today,
+          $lt: tomorrow
+        }
+      })
+        .sort({ clockOutTime: -1 })
+        .limit(1);
+
+      if (lastCheckout && lastCheckout.clockOutTime) {
+        return res.json({
+          isCheckedIn: false,
+          isCheckedOut: true,
+          checkOutTime: lastCheckout.clockOutTime,
+          currentAttendance: null,
+          success: true
+        });
+      }
+
       return res.json({
         isCheckedIn: false,
+        isCheckedOut: false,
         currentAttendance: null,
         success: true
       });
@@ -356,6 +390,7 @@ router.get('/attendance/current', authenticateToken, requireActiveSite, async (r
 
     res.json({
       isCheckedIn: true,
+      isCheckedOut: false,
       currentAttendance: {
         id: currentAttendance._id,
         checkInTime: currentAttendance.clockInTime,
