@@ -49,5 +49,5 @@ backend/
 ## ⚙️ Setup & Running
 1.  **Install**: `npm install`
 2.  **Lint**: `npm run lint`
-3.  **Dev Server**: `npm run dev` (starts nodemon on port: 4000)
+3.  **Dev Server**: `npm run dev` (starts nodemon on port 4000)
 4.  **Production**: `npm start` 
