@@ -5,18 +5,35 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const { authenticateToken } = require('../middleware/auth');
 const { createAccessToken } = require('../utils/tokens');
-
-
+const { sendVerificationEmail, sendResendVerificationEmail } = require('../utils/email');
 
 const { validateDeviceBinding } = require('./devices');
 const { validate, z } = require('../middleware/validation');
+const { cleanupUnverifiedUsers } = require('../utils/cleanupUnverifiedUsers');
+const { requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
+
+// Reusable password validation schema
+const passwordSchema = z.string()
+  .min(6, 'Password must be at least 6 characters')
+  .refine((val) => /[A-Z]/.test(val), {
+    message: 'Password must contain at least one capital letter'
+  })
+  .refine((val) => /[a-z]/.test(val), {
+    message: 'Password must contain at least one lowercase letter'
+  })
+  .refine((val) => /[0-9]/.test(val), {
+    message: 'Password must contain at least one number'
+  })
+  .refine((val) => /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(val), {
+    message: 'Password must contain at least one special character'
+  });
 
 const signupSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
-  password: z.string().min(6),
+  password: passwordSchema,
   company: z.string().min(1),
   site: z.string().min(1).optional(),
   adminCode: z.string().min(1).optional()
@@ -37,6 +54,17 @@ const refreshSchema = z.object({
 
 const logoutSchema = z.object({
   refreshToken: z.string().min(10).optional()
+});
+
+const verifyEmailSchema = z.object({
+  token: z.string().min(1).optional(),
+  code: z.string().min(6).max(6).optional()
+}).refine((data) => data.token || data.code, {
+  message: 'Either token or code must be provided'
+});
+
+const resendVerificationSchema = z.object({
+  email: z.string().email()
 });
 
 const ACCESS_TOKEN_TTL = process.env.ACCESS_TOKEN_TTL || '15m';
@@ -85,6 +113,32 @@ const createRefreshToken = (user, deviceId, deviceType) => {
   };
 };
 
+/**
+ * Generate a unique email verification token
+ * @returns {String} - Random token string
+ */
+const generateVerificationToken = () => {
+  return crypto.randomBytes(32).toString('hex');
+};
+
+/**
+ * Generate a 6-digit verification code
+ * @returns {String} - 6-digit numeric code
+ */
+const generateVerificationCode = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+/**
+ * Build verification URL for email verification
+ * @param {String} token - Verification token
+ * @returns {String} - Full verification URL
+ */
+const buildVerificationUrl = (token) => {
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:19006';
+  return `${frontendUrl}/verify-email?token=${token}`;
+};
+
 router.post('/signup', validate(signupSchema), async (req, res, next) => {
   try {
     const { name, email, password, company, site, adminCode } = req.data; // use validated data
@@ -116,6 +170,16 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
       configuredAdminCode && adminCode && safeEqual(adminCode, configuredAdminCode);
     const role = isAdminMatch ? 'admin' : 'user';
 
+    // Generate email verification token and code
+    // Get expiry hours from environment (default: 0.25 hours = 15 minutes)
+    const expiryHours = parseFloat(process.env.VERIFICATION_EXPIRY_HOURS || '0.25');
+    const expiryTime = expiryHours * 60 * 60 * 1000; // Convert to milliseconds
+    
+    const verificationToken = generateVerificationToken();
+    const verificationCode = generateVerificationCode();
+    const verificationTokenExpiry = new Date(Date.now() + expiryTime);
+    const verificationCodeExpiry = new Date(Date.now() + expiryTime);
+
     const user = await User.create({
       name,
       email: normalizedEmail,
@@ -123,15 +187,33 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
       role,
       company,
       site: resolvedSite || null,
-      sites: resolvedSite ? [resolvedSite] : []
+      sites: resolvedSite ? [resolvedSite] : [],
+      isEmailVerified: false,
+      emailVerificationToken: verificationToken,
+      emailVerificationTokenExpiry: verificationTokenExpiry,
+      emailVerificationCode: verificationCode,
+      emailVerificationCodeExpiry: verificationCodeExpiry
     });
-    const token = createAccessToken(user);
-    const { token: refreshToken, record } = createRefreshToken(user, null, 'web');
-    user.refreshTokens = (user.refreshTokens || []).concat(record).slice(-10);
-    await user.save();
+    
+    // Send verification email (don't block signup if email fails)
+    try {
+      const verificationUrl = buildVerificationUrl(verificationToken);
+      await sendVerificationEmail({
+        email: normalizedEmail,
+        name: name,
+        verificationToken: verificationToken,
+        verificationUrl: verificationUrl,
+        verificationCode: verificationCode
+      });
+    } catch (emailError) {
+      console.error('Failed to send verification email:', emailError);
+      // Don't fail signup if email fails - user can request resend later
+    }
+    
+    // Don't return tokens on signup - user must verify email first
+    // Tokens will be returned after email verification
     const responsePayload = {
-      token,
-      refreshToken,
+      message: 'Account created successfully. Please verify your email to continue.',
       user: {
         id: user._id,
         name: user.name,
@@ -139,7 +221,8 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
         role: user.role,
         company: user.company,
         site: user.site,
-        sites: user.sites || []
+        sites: user.sites || [],
+        isEmailVerified: false // Always false on signup
       }
     };
     if (appEnv === 'development') {
@@ -177,6 +260,15 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
         await new Promise(resolve => setTimeout(resolve, 1000));
         try {
           const resolvedSite = site ? String(site).trim() : '';
+          // Generate email verification token and code
+          const expiryHours = parseFloat(process.env.VERIFICATION_EXPIRY_HOURS || '0.25');
+          const expiryTime = expiryHours * 60 * 60 * 1000;
+          
+          const verificationToken = generateVerificationToken();
+          const verificationCode = generateVerificationCode();
+          const verificationTokenExpiry = new Date(Date.now() + expiryTime);
+          const verificationCodeExpiry = new Date(Date.now() + expiryTime);
+          
           const user = await User.create({
             name,
             email: normalizedEmail,
@@ -184,15 +276,31 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
             role,
             company,
             site: resolvedSite || null,
-            sites: resolvedSite ? [resolvedSite] : []
+            sites: resolvedSite ? [resolvedSite] : [],
+            isEmailVerified: false,
+            emailVerificationToken: verificationToken,
+            emailVerificationTokenExpiry: verificationTokenExpiry,
+            emailVerificationCode: verificationCode,
+            emailVerificationCodeExpiry: verificationCodeExpiry
           });
-          const token = createAccessToken(user);
-          const { token: refreshToken, record } = createRefreshToken(user, null, 'web');
-          user.refreshTokens = (user.refreshTokens || []).concat(record).slice(-10);
-          await user.save();
+          
+          // Send verification email
+          try {
+            const verificationUrl = buildVerificationUrl(verificationToken);
+            await sendVerificationEmail({
+              email: normalizedEmail,
+              name: name,
+              verificationToken: verificationToken,
+              verificationUrl: verificationUrl,
+              verificationCode: verificationCode
+            });
+          } catch (emailError) {
+            console.error('Failed to send verification email:', emailError);
+          }
+          
+          // Don't return tokens - user must verify email first
           return res.status(201).json({
-            token,
-            refreshToken,
+            message: 'Account created successfully. Please verify your email to continue.',
             user: {
               id: user._id,
               name: user.name,
@@ -200,7 +308,8 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
               role: user.role,
               company: user.company,
               site: user.site,
-              sites: user.sites || []
+              sites: user.sites || [],
+              isEmailVerified: false
             }
           });
         } catch (retryErr) {
@@ -233,6 +342,15 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
     if (!valid) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
+    
+    // Check if email is verified before allowing login
+    if (!user.isEmailVerified) {
+      return res.status(403).json({ 
+        message: 'Please verify your email before logging in. Check your inbox for the verification link and code.',
+        requiresVerification: true
+      });
+    }
+    
     if (company && company !== user.company) {
       return res.status(403).json({ message: 'Company mismatch' });
     }
@@ -267,7 +385,8 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
         role: user.role,
         company: user.company,
         site: user.site,
-        sites: user.sites || []
+        sites: user.sites || [],
+        isEmailVerified: user.isEmailVerified || false
       }
     });
   } catch (err) {
@@ -324,7 +443,8 @@ router.post('/refresh', validate(refreshSchema), async (req, res, next) => {
         role: user.role,
         company: user.company,
         site: user.site,
-        sites: user.sites || []
+        sites: user.sites || [],
+        isEmailVerified: user.isEmailVerified || false
       }
     });
   } catch (err) {
@@ -364,6 +484,148 @@ router.post('/logout', validate(logoutSchema), async (req, res, next) => {
   }
 });
 
+/**
+ * POST /api/auth/verify-email
+ * Verify user email with token or code
+ */
+router.post('/verify-email', validate(verifyEmailSchema), async (req, res, next) => {
+  try {
+    const { token, code } = req.data;
+    
+    let user;
+    
+    // Verify with token if provided
+    if (token) {
+      user = await User.findOne({
+        emailVerificationToken: token,
+        emailVerificationTokenExpiry: { $gt: new Date() } // Token not expired
+      });
+      
+      if (!user) {
+        return res.status(400).json({ 
+          message: 'Invalid or expired verification token' 
+        });
+      }
+    } 
+    // Verify with code if provided
+    else if (code) {
+      user = await User.findOne({
+        emailVerificationCode: code,
+        emailVerificationCodeExpiry: { $gt: new Date() } // Code not expired
+      });
+      
+      if (!user) {
+        return res.status(400).json({ 
+          message: 'Invalid or expired verification code' 
+        });
+      }
+    } else {
+      return res.status(400).json({ 
+        message: 'Either token or code must be provided' 
+      });
+    }
+    
+    // Mark email as verified and clear both token and code
+    user.isEmailVerified = true;
+    user.emailVerificationToken = null;
+    user.emailVerificationTokenExpiry = null;
+    user.emailVerificationCode = null;
+    user.emailVerificationCodeExpiry = null;
+    await user.save();
+    
+    // Generate tokens for authenticated session
+    const accessToken = createAccessToken(user);
+    const { token: refreshToken, record } = createRefreshToken(user, null, 'web');
+    user.refreshTokens = (user.refreshTokens || []).concat(record).slice(-10);
+    await user.save();
+    
+    return res.json({ 
+      message: 'Email verified successfully',
+      token: accessToken,
+      refreshToken: refreshToken,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        company: user.company,
+        site: user.site,
+        sites: user.sites || [],
+        isEmailVerified: user.isEmailVerified
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/**
+ * POST /api/auth/resend-verification
+ * Resend verification email to user
+ */
+router.post('/resend-verification', validate(resendVerificationSchema), async (req, res, next) => {
+  try {
+    const { email } = req.data;
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    
+    // Find user by email
+    const user = await User.findOne({ email: normalizedEmail });
+    
+    if (!user) {
+      // Don't reveal if email exists or not (security best practice)
+      return res.json({ 
+        message: 'If the email exists and is not verified, a verification email has been sent.' 
+      });
+    }
+    
+    // If already verified, don't send email
+    if (user.isEmailVerified) {
+      return res.json({ 
+        message: 'Email is already verified' 
+      });
+    }
+    
+    // Generate new verification token and code
+    const expiryHours = parseFloat(process.env.VERIFICATION_EXPIRY_HOURS || '0.25');
+    const expiryTime = expiryHours * 60 * 60 * 1000; // Convert to milliseconds
+    
+    const verificationToken = generateVerificationToken();
+    const verificationCode = generateVerificationCode();
+    const verificationTokenExpiry = new Date(Date.now() + expiryTime);
+    const verificationCodeExpiry = new Date(Date.now() + expiryTime);
+    
+    // Update user with new token and code
+    user.emailVerificationToken = verificationToken;
+    user.emailVerificationTokenExpiry = verificationTokenExpiry;
+    user.emailVerificationCode = verificationCode;
+    user.emailVerificationCodeExpiry = verificationCodeExpiry;
+    await user.save();
+    
+    // Send verification email
+    try {
+      const verificationUrl = buildVerificationUrl(verificationToken);
+      await sendResendVerificationEmail({
+        email: normalizedEmail,
+        name: user.name,
+        verificationToken: verificationToken,
+        verificationUrl: verificationUrl,
+        verificationCode: verificationCode
+      });
+      
+      return res.json({ 
+        message: 'Verification email sent successfully' 
+      });
+    } catch (emailError) {
+      console.error('Failed to send resend verification email:', emailError);
+      return res.status(500).json({ 
+        message: 'Failed to send verification email. Please try again later.' 
+      });
+    }
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.get('/me', authenticateToken, async (req, res, next) => {
   try {
     const user = await User.findById(req.user.id).select('-password');
@@ -371,6 +633,24 @@ router.get('/me', authenticateToken, async (req, res, next) => {
       return res.status(404).json({ message: 'User not found' });
     }
     return res.json({ user });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// POST /api/auth/cleanup-unverified - Manually trigger cleanup of unverified users (Admin only)
+router.post('/cleanup-unverified', authenticateToken, requireAdmin, async (req, res, next) => {
+  try {
+    const result = await cleanupUnverifiedUsers();
+    res.json({
+      success: true,
+      message: result.message,
+      result: {
+        checked: result.checked,
+        deleted: result.deleted,
+        emails: result.emails
+      }
+    });
   } catch (err) {
     return next(err);
   }

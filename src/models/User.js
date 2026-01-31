@@ -31,7 +31,13 @@ const UserSchema = new mongoose.Schema(
         createdAt: { type: Date, default: Date.now },
         expiresAt: { type: Date, required: true }
       }
-    ]
+    ],
+    // Email verification fields
+    isEmailVerified: { type: Boolean, default: false },
+    emailVerificationToken: { type: String, default: null },
+    emailVerificationTokenExpiry: { type: Date, default: null },
+    emailVerificationCode: { type: String, default: null },
+    emailVerificationCodeExpiry: { type: Date, default: null }
   },
   { timestamps: true }
 );

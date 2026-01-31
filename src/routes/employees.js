@@ -30,7 +30,23 @@ const employeeCreateSchema = z.object({
   manager: z.string().optional(),
   address: z.any().optional(),
   emergencyContact: z.any().optional(),
-  password: z.string().min(6).optional() // Password to create User account
+  password: z.union([
+    z.string()
+      .min(6, 'Password must be at least 6 characters')
+      .refine((val) => /[A-Z]/.test(val), {
+        message: 'Password must contain at least one capital letter'
+      })
+      .refine((val) => /[a-z]/.test(val), {
+        message: 'Password must contain at least one lowercase letter'
+      })
+      .refine((val) => /[0-9]/.test(val), {
+        message: 'Password must contain at least one number'
+      })
+      .refine((val) => /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(val), {
+        message: 'Password must contain at least one special character'
+      }),
+    z.undefined()
+  ]).optional() // Password to create User account
 });
 
 const employeeUpdateSchema = z.object({

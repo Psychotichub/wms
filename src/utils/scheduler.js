@@ -3,6 +3,7 @@ const { checkAndNotifyExceededContracts } = require('./contractNotifications');
 const { checkAndNotifyExceededInventory } = require('./inventoryNotifications');
 const { checkAndNotifyApproachingDeadlines, checkAndNotifyOverdueDeadlines } = require('./taskDeadlineNotifications');
 const { sendDailySummaries } = require('./dailySummaryNotifications');
+const { cleanupUnverifiedUsers } = require('./cleanupUnverifiedUsers');
 const Notification = require('../models/Notification');
 
 /**
@@ -109,12 +110,31 @@ function initializeScheduledJobs() {
     timezone: 'UTC'
   });
 
+  // Clean up unverified users every 15 minutes
+  // This removes users who haven't verified their email within the expiry period (default: 15 minutes)
+  // Running every 15 minutes ensures expired users are cleaned up promptly
+  cron.schedule('*/15 * * * *', async () => {
+    console.log('[Scheduler] Running unverified users cleanup...');
+    try {
+      const result = await cleanupUnverifiedUsers();
+      if (result.deleted > 0) {
+        console.log(`[Scheduler] Unverified users cleanup completed: ${result.checked} checked, ${result.deleted} deleted`);
+      }
+    } catch (error) {
+      console.error('[Scheduler] Error cleaning up unverified users:', error);
+    }
+  }, {
+    scheduled: true,
+    timezone: 'UTC'
+  });
+
   console.log('[Scheduler] Contract exceed check scheduled to run at 9:00 AM and 6:00 PM daily (UTC)');
   console.log('[Scheduler] Inventory exceed check scheduled to run at 9:00 AM and 6:00 PM daily (UTC)');
   console.log('[Scheduler] Deadline approaching check scheduled to run every hour (UTC)');
   console.log('[Scheduler] Deadline overdue check scheduled to run every hour (UTC)');
   console.log('[Scheduler] Daily summary check scheduled to run every hour (UTC)');
   console.log('[Scheduler] Scheduled notification processor runs every 15 minutes (UTC)');
+  console.log('[Scheduler] Unverified users cleanup scheduled to run every 15 minutes (UTC)');
 }
 
 module.exports = {

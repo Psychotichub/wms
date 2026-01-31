@@ -12,7 +12,20 @@ const idParamsSchema = z.object({
 const userCreateSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
-  password: z.string().min(1),
+  password: z.string()
+    .min(6, 'Password must be at least 6 characters')
+    .refine((val) => /[A-Z]/.test(val), {
+      message: 'Password must contain at least one capital letter'
+    })
+    .refine((val) => /[a-z]/.test(val), {
+      message: 'Password must contain at least one lowercase letter'
+    })
+    .refine((val) => /[0-9]/.test(val), {
+      message: 'Password must contain at least one number'
+    })
+    .refine((val) => /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(val), {
+      message: 'Password must contain at least one special character'
+    }),
   role: z.string().optional(),
   company: z.string().optional()
 });

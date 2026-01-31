@@ -53,7 +53,8 @@ router.post('/', authenticateToken, requireAdmin, validate(siteSchema), async (r
         role: user.role,
         company: user.company,
         site: user.site,
-        sites: user.sites || []
+        sites: user.sites || [],
+        isEmailVerified: user.isEmailVerified || false
       }
     });
   } catch (err) {
@@ -84,7 +85,8 @@ router.put('/active', authenticateToken, requireAdmin, validate(siteSchema), asy
         role: user.role,
         company: user.company,
         site: user.site,
-        sites: user.sites || []
+        sites: user.sites || [],
+        isEmailVerified: user.isEmailVerified || false
       }
     });
   } catch (err) {
