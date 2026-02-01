@@ -291,13 +291,39 @@ router.get('/attendance/history', authenticateToken, requireActiveSite, validate
     }
 
     let query = {
-      employee: userId
+      employee: userId,
+      // Only show completed attendance records (those that have been checked out)
+      status: 'completed',
+      clockOutTime: { $exists: true, $ne: null }
     };
 
     if (startDate && endDate) {
+      // The date field is stored as midnight in server timezone, which may differ from UTC
+      // Instead of relying on the date field (which has timezone issues), 
+      // we'll query by clockInTime/clockOutTime which are more reliable
+      // But we still need the date field for the query, so we'll use a wide range
+      
+      // Parse dates in UTC
+      const startDateUTC = new Date(startDate + 'T00:00:00.000Z');
+      const endDateUTC = new Date(endDate + 'T23:59:59.999Z');
+      
+      // Expand range to account for timezone offsets (up to +/- 12 hours = 1 day)
+      // Go back 1 day and forward 1 day to catch all records
+      startDateUTC.setUTCDate(startDateUTC.getUTCDate() - 1);
+      endDateUTC.setUTCDate(endDateUTC.getUTCDate() + 1);
+      endDateUTC.setUTCHours(23, 59, 59, 999);
+      
+      // Query by date field with expanded range
       query.date = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
+        $gte: startDateUTC,
+        $lte: endDateUTC
+      };
+      
+      // Also filter by clockOutTime to ensure we only get records within the actual date range
+      // This is more reliable than the date field
+      query.clockOutTime = {
+        $gte: new Date(startDate + 'T00:00:00.000Z'),
+        $lte: new Date(endDate + 'T23:59:59.999Z')
       };
     }
 
