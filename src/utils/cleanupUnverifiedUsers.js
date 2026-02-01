@@ -17,9 +17,11 @@ async function cleanupUnverifiedUsers() {
     // Find users who:
     // 1. Have not verified their email (isEmailVerified: false)
     // 2. Have expired verification tokens/codes OR were created more than expiryHours ago
-    // 3. This ensures we clean up accounts that are definitely expired
+    // 3. Were created via signup (not by admin) - only delete signup-created users
+    // 4. This ensures we clean up accounts that are definitely expired
     const expiredUsers = await User.find({
       isEmailVerified: false,
+      createdByAdmin: { $ne: true }, // Only delete users created via signup, not by admin
       $or: [
         // Token expired
         { emailVerificationTokenExpiry: { $lt: now } },

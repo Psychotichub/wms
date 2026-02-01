@@ -143,11 +143,6 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
   try {
     const { name, email, password, company, site, adminCode } = req.data; // use validated data
     const normalizedEmail = String(email || '').trim().toLowerCase();
-    console.log('Signup admin code check:', {
-      provided: Boolean(adminCode),
-      configured: Boolean(process.env.ADMIN_SIGNUP_CODE),
-      matches: Boolean(adminCode && process.env.ADMIN_SIGNUP_CODE && safeEqual(adminCode, process.env.ADMIN_SIGNUP_CODE))
-    });
     if (!company) {
       return res.status(400).json({ message: 'Company is required' });
     }
@@ -170,6 +165,31 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
       configuredAdminCode && adminCode && safeEqual(adminCode, configuredAdminCode);
     const role = isAdminMatch ? 'admin' : 'user';
 
+    // Check if company or site already has an admin - if so, ignore site assignment for new admin
+    let finalSite = resolvedSite || null;
+    let finalSites = resolvedSite ? [resolvedSite] : [];
+    
+    if (isAdminMatch) {
+      // Check if company already has an admin (regardless of site)
+      const existingCompanyAdmin = await User.findOne({ 
+        role: 'admin', 
+        company: company 
+      });
+      
+      // Also check if the specific site already has an admin
+      const existingSiteAdmin = resolvedSite ? await User.findOne({ 
+        role: 'admin', 
+        site: resolvedSite,
+        company: company 
+      }) : null;
+      
+      if (existingCompanyAdmin || existingSiteAdmin) {
+        // Company or site already has an admin, ignore site assignment
+        finalSite = null;
+        finalSites = [];
+      }
+    }
+
     // Generate email verification token and code
     // Get expiry hours from environment (default: 0.25 hours = 15 minutes)
     const expiryHours = parseFloat(process.env.VERIFICATION_EXPIRY_HOURS || '0.25');
@@ -186,8 +206,8 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
       password,
       role,
       company,
-      site: resolvedSite || null,
-      sites: resolvedSite ? [resolvedSite] : [],
+      site: finalSite,
+      sites: finalSites,
       isEmailVerified: false,
       emailVerificationToken: verificationToken,
       emailVerificationTokenExpiry: verificationTokenExpiry,
@@ -351,10 +371,12 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
       });
     }
     
-    if (company && company !== user.company) {
+    // Case-insensitive company comparison
+    if (company && user.company && company.toLowerCase().trim() !== user.company.toLowerCase().trim()) {
       return res.status(403).json({ message: 'Company mismatch' });
     }
-    if (site && site !== user.site) {
+    // Case-insensitive site comparison
+    if (site && user.site && site.toLowerCase().trim() !== user.site.toLowerCase().trim()) {
       return res.status(403).json({ message: 'Site mismatch' });
     }
 

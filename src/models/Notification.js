@@ -33,6 +33,7 @@ const notificationSchema = new mongoose.Schema({
       'time_rejected',
       'system_announcement',
       'reminder',
+      'todo_reminder',
       'overtime_alert',
       'schedule_change',
       'low_stock',

@@ -51,6 +51,14 @@ const telemetryRoutes = require('./routes/telemetry');
 const contractRoutes = require('./routes/contracts');
 const inventoryRoutes = require('./routes/inventory');
 const taskRoutes = require('./routes/tasks');
+let todoRoutes;
+try {
+  todoRoutes = require('./routes/todos');
+  console.log('[Server] Todo routes loaded successfully');
+} catch (error) {
+  console.error('[Server] Error loading todo routes:', error);
+  throw error;
+}
 const { initializeScheduledJobs } = require('./utils/scheduler');
 
 const app = express();
@@ -162,6 +170,8 @@ app.use('/api/telemetry', telemetryRoutes);
 app.use('/api/contracts', contractRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/tasks', taskRoutes);
+app.use('/api/todos', todoRoutes);
+console.log('[Server] Todo routes registered at /api/todos');
 
 app.use((err, _req, res, _next) => {
   // Generic error handler to avoid leaking details

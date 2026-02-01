@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+const crypto = require('crypto');
 const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
 const Location = require('../models/Location');
@@ -9,8 +10,9 @@ const DailyReport = require('../models/DailyReport');
 const Notification = require('../models/Notification');
 const NotificationPreferences = require('../models/NotificationPreferences');
 const { validateDeviceBinding } = require('./devices');
-const { authenticateToken, requireActiveSite } = require('../middleware/auth');
+const { authenticateToken, requireActiveSite, requireAdmin } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
+const { sendVerificationEmail } = require('../utils/email');
 
 // Use shared JWT auth middleware
 const requireAuth = [authenticateToken, requireActiveSite];
@@ -622,14 +624,60 @@ router.post('/', requireAuth, requireManager, validate(employeeCreateSchema), as
       const company = req.user.company;
       const site = req.user.site;
       
+      // Determine user role based on employee role
+      // If employee role is 'admin', create admin user account, otherwise create user account
+      const userRole = (role === 'admin') ? 'admin' : 'user';
+      
+      // Generate email verification token and code for employee
+      const expiryHours = parseFloat(process.env.VERIFICATION_EXPIRY_HOURS || '0.25');
+      const expiryTime = expiryHours * 60 * 60 * 1000;
+      
+      const generateVerificationToken = () => {
+        return crypto.randomBytes(32).toString('hex');
+      };
+      
+      const generateVerificationCode = () => {
+        return Math.floor(100000 + Math.random() * 900000).toString();
+      };
+      
+      const buildVerificationUrl = (token) => {
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        return `${frontendUrl}/verify-email?token=${token}`;
+      };
+      
+      const verificationToken = generateVerificationToken();
+      const verificationCode = generateVerificationCode();
+      const verificationTokenExpiry = new Date(Date.now() + expiryTime);
+      const verificationCodeExpiry = new Date(Date.now() + expiryTime);
+      
       userAccount = await User.create({
         name,
         email: normalizedEmail,
         password,
-        role: 'user', // Employees get 'user' role by default
+        role: userRole,
         company,
-        site
+        site,
+        isEmailVerified: false,
+        emailVerificationToken: verificationToken,
+        emailVerificationTokenExpiry: verificationTokenExpiry,
+        emailVerificationCode: verificationCode,
+        emailVerificationCodeExpiry: verificationCodeExpiry,
+        createdByAdmin: true // Flag to prevent cleanup from deleting admin-created users
       });
+      
+      // Send verification email to employee
+      try {
+        const verificationUrl = buildVerificationUrl(verificationToken);
+        await sendVerificationEmail({
+          email: normalizedEmail,
+          name: name,
+          verificationToken: verificationToken,
+          verificationUrl: verificationUrl,
+          verificationCode: verificationCode
+        });
+      } catch (emailError) {
+        // Don't fail user creation if email fails - user can request resend later
+      }
     }
 
     // Create Employee
@@ -717,14 +765,62 @@ router.put(
           employee.user = existingUser._id;
         } else {
           // Create new User
+          // Determine user role based on employee role
+          // If employee role is 'admin', create admin user account, otherwise create user account
+          const employeeRole = role !== undefined ? role : employee.role;
+          const userRole = (employeeRole === 'admin') ? 'admin' : 'user';
+          
+          // Generate email verification token and code for employee
+          const expiryHours = parseFloat(process.env.VERIFICATION_EXPIRY_HOURS || '0.25');
+          const expiryTime = expiryHours * 60 * 60 * 1000;
+          
+          const generateVerificationToken = () => {
+            return crypto.randomBytes(32).toString('hex');
+          };
+          
+          const generateVerificationCode = () => {
+            return Math.floor(100000 + Math.random() * 900000).toString();
+          };
+          
+          const buildVerificationUrl = (token) => {
+            const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+            return `${frontendUrl}/verify-email?token=${token}`;
+          };
+          
+          const verificationToken = generateVerificationToken();
+          const verificationCode = generateVerificationCode();
+          const verificationTokenExpiry = new Date(Date.now() + expiryTime);
+          const verificationCodeExpiry = new Date(Date.now() + expiryTime);
+          
           const userAccount = await User.create({
             name: name || employee.name,
             email: normalizedEmail,
             password,
-            role: 'user',
+            role: userRole,
             company: req.user.company,
-            site: req.user.site
+            site: req.user.site,
+            isEmailVerified: false,
+            emailVerificationToken: verificationToken,
+            emailVerificationTokenExpiry: verificationTokenExpiry,
+            emailVerificationCode: verificationCode,
+            emailVerificationCodeExpiry: verificationCodeExpiry,
+            createdByAdmin: true // Flag to prevent cleanup from deleting admin-created users
           });
+          
+          // Send verification email to employee
+          try {
+            const verificationUrl = buildVerificationUrl(verificationToken);
+            await sendVerificationEmail({
+              email: normalizedEmail,
+              name: name || employee.name,
+              verificationToken: verificationToken,
+              verificationUrl: verificationUrl,
+              verificationCode: verificationCode
+            });
+          } catch (emailError) {
+            // Don't fail user creation if email fails - user can request resend later
+          }
+          
           employee.user = userAccount._id;
           userCreated = true;
         }
@@ -743,6 +839,19 @@ router.put(
     if (manager !== undefined) employee.manager = manager;
     if (address !== undefined) employee.address = address;
     if (emergencyContact !== undefined) employee.emergencyContact = emergencyContact;
+
+    // If role is being updated and user account exists, update user role accordingly
+    if (role !== undefined && employee.user) {
+      const user = await User.findById(employee.user);
+      if (user) {
+        // Update user role based on employee role
+        const newUserRole = (role === 'admin') ? 'admin' : 'user';
+        if (user.role !== newUserRole) {
+          user.role = newUserRole;
+          await user.save();
+        }
+      }
+    }
 
     await employee.save();
     await employee.populate('manager', 'name email');
@@ -768,21 +877,26 @@ router.put(
   }
 });
 
-// DELETE /api/employees/:id - Deactivate employee (soft delete)
-router.delete('/:id', requireAuth, requireManager, async (req, res) => {
+// DELETE /api/employees/:id - Delete employee and associated user account (admin only)
+router.delete('/:id', requireAuth, requireActiveSite, requireAdmin, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
   try {
     const employee = await Employee.findById(req.params.id);
     if (!employee) {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
-    employee.isActive = false;
-    await employee.save();
+    // Delete associated user account if it exists
+    if (employee.user) {
+      await User.findByIdAndDelete(employee.user);
+    }
 
-    res.json({ message: 'Employee deactivated successfully' });
+    // Delete the employee record
+    await Employee.findByIdAndDelete(req.params.id);
+
+    res.json({ message: 'Employee and associated account deleted successfully' });
   } catch (error) {
-    console.error('Error deactivating employee:', error);
-    res.status(500).json({ error: 'Failed to deactivate employee' });
+    console.error('Error deleting employee:', error);
+    res.status(500).json({ error: 'Failed to delete employee' });
   }
 });
 

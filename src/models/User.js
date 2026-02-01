@@ -37,7 +37,9 @@ const UserSchema = new mongoose.Schema(
     emailVerificationToken: { type: String, default: null },
     emailVerificationTokenExpiry: { type: Date, default: null },
     emailVerificationCode: { type: String, default: null },
-    emailVerificationCodeExpiry: { type: Date, default: null }
+    emailVerificationCodeExpiry: { type: Date, default: null },
+    // Track if user was created by admin (to prevent cleanup from deleting them)
+    createdByAdmin: { type: Boolean, default: false }
   },
   { timestamps: true }
 );

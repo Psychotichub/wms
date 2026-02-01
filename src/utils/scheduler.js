@@ -4,6 +4,7 @@ const { checkAndNotifyExceededInventory } = require('./inventoryNotifications');
 const { checkAndNotifyApproachingDeadlines, checkAndNotifyOverdueDeadlines } = require('./taskDeadlineNotifications');
 const { sendDailySummaries } = require('./dailySummaryNotifications');
 const { cleanupUnverifiedUsers } = require('./cleanupUnverifiedUsers');
+const { checkAndNotifyTodoReminders } = require('./todoReminderNotifications');
 const Notification = require('../models/Notification');
 
 /**
@@ -110,6 +111,21 @@ function initializeScheduledJobs() {
     timezone: 'UTC'
   });
 
+  // Check todo reminders every 15 minutes
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const result = await checkAndNotifyTodoReminders();
+      if (result.notified > 0) {
+        console.log(`[Scheduler] Todo reminder check completed: ${result.checked} todos checked, ${result.notified} reminders sent`);
+      }
+    } catch (error) {
+      console.error('[Scheduler] Error checking todo reminders:', error);
+    }
+  }, {
+    scheduled: true,
+    timezone: 'UTC'
+  });
+
   // Clean up unverified users every 15 minutes
   // This removes users who haven't verified their email within the expiry period (default: 15 minutes)
   // Running every 15 minutes ensures expired users are cleaned up promptly
@@ -134,6 +150,7 @@ function initializeScheduledJobs() {
   console.log('[Scheduler] Deadline overdue check scheduled to run every hour (UTC)');
   console.log('[Scheduler] Daily summary check scheduled to run every hour (UTC)');
   console.log('[Scheduler] Scheduled notification processor runs every 15 minutes (UTC)');
+  console.log('[Scheduler] Todo reminder check scheduled to run every 15 minutes (UTC)');
   console.log('[Scheduler] Unverified users cleanup scheduled to run every 15 minutes (UTC)');
 }
 
