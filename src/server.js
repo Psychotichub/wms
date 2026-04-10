@@ -51,6 +51,7 @@ const telemetryRoutes = require('./routes/telemetry');
 const contractRoutes = require('./routes/contracts');
 const inventoryRoutes = require('./routes/inventory');
 const taskRoutes = require('./routes/tasks');
+const isolationTestRoutes = require('./routes/isolationTests');
 let todoRoutes;
 try {
   todoRoutes = require('./routes/todos');
@@ -171,6 +172,7 @@ app.use('/api/contracts', contractRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/todos', todoRoutes);
+app.use('/api/isolation-tests', isolationTestRoutes);
 console.log('[Server] Todo routes registered at /api/todos');
 
 app.use((err, _req, res, _next) => {
