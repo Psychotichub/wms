@@ -37,60 +37,52 @@ const dailyUpdateSchema = z.object({
   notes: z.string().optional()
 });
 
-router.get('/daily', authenticateToken, requireActiveSite, async (req, res, next) => {
-  try {
-    const query =
-      req.user.role === 'admin'
-        ? { company: req.user.company, site: req.user.site }
-        : { createdBy: req.user.id, company: req.user.company, site: req.user.site };
-    const reports = await DailyReport.find(query).sort({ date: -1 });
-    return res.json({ reports });
-  } catch (err) {
-    return next(err);
-  }
+router.get('/daily', authenticateToken, requireActiveSite, async (req, res) => {
+  const query =
+    req.user.role === 'admin'
+      ? { company: req.user.company, site: req.user.site }
+      : { createdBy: req.user.id, company: req.user.company, site: req.user.site };
+  const reports = await DailyReport.find(query).sort({ date: -1 });
+  return res.json({ reports });
 });
 
-router.post('/daily', authenticateToken, requireActiveSite, validate(dailyCreateSchema), async (req, res, next) => {
-  try {
-    const { date, summary, tasks, status, materialId, quantity, location, panel, circuit, notes } = req.data;
+router.post('/daily', authenticateToken, requireActiveSite, validate(dailyCreateSchema), async (req, res) => {
+  const { date, summary, tasks, status, materialId, quantity, location, panel, circuit, notes } = req.data;
 
-    const material = await Material.findOne({ _id: materialId, company: req.user.company, site: req.user.site });
-    if (!material) {
-      return res.status(400).json({ message: 'Material must exist' });
-    }
-
-    if (panel || circuit) {
-      const foundPanel = await Panel.findOne({
-        name: panel,
-        circuit,
-        company: req.user.company,
-        site: req.user.site
-      });
-      if (!foundPanel) {
-        return res.status(400).json({ message: 'Panel and circuit must exist' });
-      }
-    }
-
-    const report = await DailyReport.create({
-      date: date ? new Date(date) : new Date(),
-      summary: summary || material.name || '',
-      tasks,
-      status,
-      materialId,
-      materialName: material.name,
-      quantity,
-      location,
-      panel,
-      circuit,
-      notes,
-      company: req.user.company,
-      site: req.user.site,
-      createdBy: req.user.id
-    });
-    return res.status(201).json({ report });
-  } catch (err) {
-    return next(err);
+  const material = await Material.findOne({ _id: materialId, company: req.user.company, site: req.user.site });
+  if (!material) {
+    return res.status(400).json({ message: 'Material must exist' });
   }
+
+  if (panel || circuit) {
+    const foundPanel = await Panel.findOne({
+      name: panel,
+      circuit,
+      company: req.user.company,
+      site: req.user.site
+    });
+    if (!foundPanel) {
+      return res.status(400).json({ message: 'Panel and circuit must exist' });
+    }
+  }
+
+  const report = await DailyReport.create({
+    date: date ? new Date(date) : new Date(),
+    summary: summary || material.name || '',
+    tasks,
+    status,
+    materialId,
+    materialName: material.name,
+    quantity,
+    location,
+    panel,
+    circuit,
+    notes,
+    company: req.user.company,
+    site: req.user.site,
+    createdBy: req.user.id
+  });
+  return res.status(201).json({ report });
 });
 
 router.put(
@@ -99,62 +91,53 @@ router.put(
   requireActiveSite,
   validate(idParamsSchema, { source: 'params' }),
   validate(dailyUpdateSchema),
-  async (req, res, next) => {
-  try {
-    const updates = req.data;
+  async (req, res) => {
+  const updates = req.data;
 
-    if (updates.materialId) {
-      const material = await Material.findOne({
-        _id: updates.materialId,
-        company: req.user.company,
-        site: req.user.site
-      });
-      if (!material) {
-        return res.status(400).json({ message: 'Material must exist' });
-      }
-      updates.materialName = material.name;
-      if (!updates.summary) {
-        updates.summary = material.name;
-      }
+  if (updates.materialId) {
+    const material = await Material.findOne({
+      _id: updates.materialId,
+      company: req.user.company,
+      site: req.user.site
+    });
+    if (!material) {
+      return res.status(400).json({ message: 'Material must exist' });
     }
-
-    if (updates.panel || updates.circuit) {
-      const existing = await Panel.findOne({
-        name: updates.panel,
-        circuit: updates.circuit,
-        company: req.user.company,
-        site: req.user.site
-      });
-      if (!existing) {
-        return res.status(400).json({ message: 'Panel and circuit must exist' });
-      }
+    updates.materialName = material.name;
+    if (!updates.summary) {
+      updates.summary = material.name;
     }
-
-    const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
-    const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
-    const report = await DailyReport.findOneAndUpdate(filter, updates, { new: true });
-    if (!report) {
-      return res.status(404).json({ message: 'Report not found' });
-    }
-    return res.json({ report });
-  } catch (err) {
-    return next(err);
   }
+
+  if (updates.panel || updates.circuit) {
+    const existing = await Panel.findOne({
+      name: updates.panel,
+      circuit: updates.circuit,
+      company: req.user.company,
+      site: req.user.site
+    });
+    if (!existing) {
+      return res.status(400).json({ message: 'Panel and circuit must exist' });
+    }
+  }
+
+  const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
+  const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
+  const report = await DailyReport.findOneAndUpdate(filter, updates, { new: true });
+  if (!report) {
+    return res.status(404).json({ message: 'Report not found' });
+  }
+  return res.json({ report });
 });
 
-router.delete('/daily/:id', authenticateToken, requireActiveSite, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
-  try {
-    const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
-    const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
-    const deleted = await DailyReport.findOneAndDelete(filter);
-    if (!deleted) {
-      return res.status(404).json({ message: 'Report not found' });
-    }
-    return res.json({ success: true });
-  } catch (err) {
-    return next(err);
+router.delete('/daily/:id', authenticateToken, requireActiveSite, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
+  const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
+  const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
+  const deleted = await DailyReport.findOneAndDelete(filter);
+  if (!deleted) {
+    return res.status(404).json({ message: 'Report not found' });
   }
+  return res.json({ success: true });
 });
 
 module.exports = router;
-

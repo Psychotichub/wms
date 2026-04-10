@@ -5,7 +5,9 @@ const { checkAndNotifyApproachingDeadlines, checkAndNotifyOverdueDeadlines } = r
 const { sendDailySummaries } = require('./dailySummaryNotifications');
 const { cleanupUnverifiedUsers } = require('./cleanupUnverifiedUsers');
 const { checkAndNotifyTodoReminders } = require('./todoReminderNotifications');
+const { checkoutStaleAttendance } = require('./staleCheckoutCleanup');
 const Notification = require('../models/Notification');
+const logger = require('../config/logger').child({ module: 'scheduler' });
 
 /**
  * Initialize scheduled jobs
@@ -20,138 +22,105 @@ function initializeScheduledJobs() {
   // '0 9,18 * * *' means: at minute 0 of hours 9 and 18, every day
   
   cron.schedule('0 9,18 * * *', async () => {
-    console.log('[Scheduler] Running contract exceed check...');
+    logger.info('Running contract exceed check');
     try {
       const result = await checkAndNotifyExceededContracts();
-      console.log(`[Scheduler] Contract exceed check completed: ${result.checked} contracts checked, ${result.notified} notifications sent`);
+      logger.info({ checked: result.checked, notified: result.notified }, 'Contract exceed check completed');
     } catch (error) {
-      console.error('[Scheduler] Error running contract exceed check:', error);
+      logger.error({ err: error }, 'Error running contract exceed check');
     }
-  }, {
-    scheduled: true,
-    timezone: 'UTC' // Adjust timezone as needed
-  });
+  }, { scheduled: true, timezone: 'UTC' });
 
-  // Schedule inventory exceed check at 9:00 AM and 6:00 PM daily
   cron.schedule('0 9,18 * * *', async () => {
-    console.log('[Scheduler] Running inventory exceed check...');
+    logger.info('Running inventory exceed check');
     try {
       const result = await checkAndNotifyExceededInventory();
-      console.log(`[Scheduler] Inventory exceed check completed: ${result.checked} materials checked, ${result.notified} notifications sent`);
+      logger.info({ checked: result.checked, notified: result.notified }, 'Inventory exceed check completed');
     } catch (error) {
-      console.error('[Scheduler] Error running inventory exceed check:', error);
+      logger.error({ err: error }, 'Error running inventory exceed check');
     }
-  }, {
-    scheduled: true,
-    timezone: 'UTC' // Adjust timezone as needed
-  });
+  }, { scheduled: true, timezone: 'UTC' });
 
-  // Schedule deadline approaching check every hour
-  // '0 * * * *' means: at minute 0 of every hour
   cron.schedule('0 * * * *', async () => {
-    console.log('[Scheduler] Running deadline approaching check...');
     try {
       const result = await checkAndNotifyApproachingDeadlines();
       if (result.notified > 0) {
-        console.log(`[Scheduler] Deadline approaching check completed: ${result.checked} tasks checked, ${result.notified} notifications sent`);
+        logger.info({ checked: result.checked, notified: result.notified }, 'Deadline approaching check completed');
       }
     } catch (error) {
-      console.error('[Scheduler] Error running deadline approaching check:', error);
+      logger.error({ err: error }, 'Error running deadline approaching check');
     }
-  }, {
-    scheduled: true,
-    timezone: 'UTC'
-  });
+  }, { scheduled: true, timezone: 'UTC' });
 
-  // Schedule deadline overdue check every hour
   cron.schedule('0 * * * *', async () => {
-    console.log('[Scheduler] Running deadline overdue check...');
     try {
       const result = await checkAndNotifyOverdueDeadlines();
       if (result.notified > 0) {
-        console.log(`[Scheduler] Deadline overdue check completed: ${result.checked} tasks checked, ${result.notified} notifications sent`);
+        logger.info({ checked: result.checked, notified: result.notified }, 'Deadline overdue check completed');
       }
     } catch (error) {
-      console.error('[Scheduler] Error running deadline overdue check:', error);
+      logger.error({ err: error }, 'Error running deadline overdue check');
     }
-  }, {
-    scheduled: true,
-    timezone: 'UTC'
-  });
+  }, { scheduled: true, timezone: 'UTC' });
 
-  // Schedule daily summary check every hour
-  // This checks each user's configured time and sends summaries accordingly
   cron.schedule('0 * * * *', async () => {
     try {
       const result = await sendDailySummaries();
       if (result.notified > 0) {
-        console.log(`[Scheduler] Daily summary check completed: ${result.checked} users checked, ${result.notified} summaries sent`);
+        logger.info({ checked: result.checked, notified: result.notified }, 'Daily summary check completed');
       }
     } catch (error) {
-      console.error('[Scheduler] Error sending daily summaries:', error);
+      logger.error({ err: error }, 'Error sending daily summaries');
     }
-  }, {
-    scheduled: true,
-    timezone: 'UTC'
-  });
+  }, { scheduled: true, timezone: 'UTC' });
 
-  // Process scheduled notifications every 15 minutes
-  // This sends notifications that were scheduled for quiet hours or other future times
   cron.schedule('*/15 * * * *', async () => {
     try {
       const result = await Notification.processScheduledNotifications();
       if (result.processed > 0) {
-        console.log(`[Scheduler] Processed ${result.processed} scheduled notifications`);
+        logger.info({ processed: result.processed }, 'Processed scheduled notifications');
       }
     } catch (error) {
-      console.error('[Scheduler] Error processing scheduled notifications:', error);
+      logger.error({ err: error }, 'Error processing scheduled notifications');
     }
-  }, {
-    scheduled: true,
-    timezone: 'UTC'
-  });
+  }, { scheduled: true, timezone: 'UTC' });
 
-  // Check todo reminders every 15 minutes
   cron.schedule('*/15 * * * *', async () => {
     try {
       const result = await checkAndNotifyTodoReminders();
       if (result.notified > 0) {
-        console.log(`[Scheduler] Todo reminder check completed: ${result.checked} todos checked, ${result.notified} reminders sent`);
+        logger.info({ checked: result.checked, notified: result.notified }, 'Todo reminder check completed');
       }
     } catch (error) {
-      console.error('[Scheduler] Error checking todo reminders:', error);
+      logger.error({ err: error }, 'Error checking todo reminders');
     }
-  }, {
-    scheduled: true,
-    timezone: 'UTC'
-  });
+  }, { scheduled: true, timezone: 'UTC' });
 
-  // Clean up unverified users every 15 minutes
-  // This removes users who haven't verified their email within the expiry period (default: 15 minutes)
-  // Running every 15 minutes ensures expired users are cleaned up promptly
   cron.schedule('*/15 * * * *', async () => {
-    console.log('[Scheduler] Running unverified users cleanup...');
     try {
       const result = await cleanupUnverifiedUsers();
       if (result.deleted > 0) {
-        console.log(`[Scheduler] Unverified users cleanup completed: ${result.checked} checked, ${result.deleted} deleted`);
+        logger.info({ checked: result.checked, deleted: result.deleted }, 'Unverified users cleanup completed');
       }
     } catch (error) {
-      console.error('[Scheduler] Error cleaning up unverified users:', error);
+      logger.error({ err: error }, 'Error cleaning up unverified users');
     }
-  }, {
-    scheduled: true,
-    timezone: 'UTC'
-  });
+  }, { scheduled: true, timezone: 'UTC' });
 
-  console.log('[Scheduler] Contract exceed check scheduled to run at 9:00 AM and 6:00 PM daily (UTC)');
-  console.log('[Scheduler] Inventory exceed check scheduled to run at 9:00 AM and 6:00 PM daily (UTC)');
-  console.log('[Scheduler] Deadline approaching check scheduled to run every hour (UTC)');
-  console.log('[Scheduler] Deadline overdue check scheduled to run every hour (UTC)');
-  console.log('[Scheduler] Daily summary check scheduled to run every hour (UTC)');
-  console.log('[Scheduler] Scheduled notification processor runs every 15 minutes (UTC)');
-  console.log('[Scheduler] Todo reminder check scheduled to run every 15 minutes (UTC)');
-  console.log('[Scheduler] Unverified users cleanup scheduled to run every 15 minutes (UTC)');
+  // Auto-checkout stale attendance records every 30 minutes
+  // Catches users who left without checking out (app killed, GPS lost, outside tracking window, etc.)
+  cron.schedule('*/30 * * * *', async () => {
+    try {
+      const result = await checkoutStaleAttendance();
+      if (result.checkedOut > 0) {
+        logger.info({ checked: result.checked, checkedOut: result.checkedOut }, 'Stale attendance auto-checkout completed');
+      }
+    } catch (error) {
+      logger.error({ err: error }, 'Error running stale attendance checkout');
+    }
+  }, { scheduled: true, timezone: 'UTC' });
+
+  logger.info('All scheduled jobs initialised');
 }
 
 module.exports = {

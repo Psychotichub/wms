@@ -150,7 +150,6 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
     
     // Check database connection
     if (mongoose.connection.readyState !== 1) {
-      console.error('Database not connected. ReadyState:', mongoose.connection.readyState);
       return res.status(503).json({ message: 'Database connection unavailable. Please try again later.' });
     }
     
@@ -226,7 +225,6 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
         verificationCode: verificationCode
       });
     } catch (emailError) {
-      console.error('Failed to send verification email:', emailError);
       // Don't fail signup if email fails - user can request resend later
     }
     
@@ -254,14 +252,6 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
     }
     return res.status(201).json(responsePayload);
   } catch (err) {
-    // Log detailed error for debugging
-    console.error('Signup error:', {
-      message: err.message,
-      name: err.name,
-      code: err.code,
-      stack: appEnv === 'development' ? err.stack : undefined
-    });
-    
     // Handle specific MongoDB errors
     if (err.name === 'ValidationError') {
       const messages = Object.values(err.errors).map(e => e.message).join(', ');
@@ -275,7 +265,6 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
       }
       // Handle other duplicate key errors (like phoneNumber index)
       if (err.message && err.message.includes('phoneNumber')) {
-        console.error('phoneNumber index error - this should be fixed by migration:', err.message);
         // Retry once after a brief delay to allow migration to complete
         await new Promise(resolve => setTimeout(resolve, 1000));
         try {
@@ -314,8 +303,7 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
               verificationUrl: verificationUrl,
               verificationCode: verificationCode
             });
-          } catch (emailError) {
-            console.error('Failed to send verification email:', emailError);
+          } catch {
           }
           
           // Don't return tokens - user must verify email first
@@ -638,7 +626,6 @@ router.post('/resend-verification', validate(resendVerificationSchema), async (r
         message: 'Verification email sent successfully' 
       });
     } catch (emailError) {
-      console.error('Failed to send resend verification email:', emailError);
       return res.status(500).json({ 
         message: 'Failed to send verification email. Please try again later.' 
       });

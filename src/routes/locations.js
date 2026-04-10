@@ -38,51 +38,143 @@ const attendanceHistoryQuerySchema = z.object({
 
 // Get all locations for the organization (Admin only, includes inactive)
 router.get('/', authenticateToken, requireActiveSite, requireAdmin, async (req, res) => {
-  try {
-    const orgId = req.user.organizationId || req.user.company || req.user.site;
-    const locations = await Location.find({
-      organizationId: orgId
-    })
-      .select('name coordinates address type radius center isActive createdAt updatedAt')
-      .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 });
+  const orgId = req.user.organizationId || req.user.company || req.user.site;
+  const locations = await Location.find({
+    organizationId: orgId
+  })
+    .select('name coordinates address type radius center isActive createdAt updatedAt')
+    .populate('createdBy', 'name email')
+    .sort({ createdAt: -1 });
 
-    // Format for frontend consumption
-    const formattedLocations = locations.map(location => ({
-      id: location._id,
-      name: location.name,
-      address: location.address,
-      coordinates: location.coordinates,
-      type: location.type,
-      radius: location.radius,
-      center: location.center,
-      isActive: location.isActive,
-      createdAt: location.createdAt,
-      updatedAt: location.updatedAt,
-      createdBy: location.createdBy ? {
-        name: location.createdBy.name,
-        email: location.createdBy.email
-      } : null
-    }));
+  // Format for frontend consumption
+  const formattedLocations = locations.map(location => ({
+    id: location._id,
+    name: location.name,
+    address: location.address,
+    coordinates: location.coordinates,
+    type: location.type,
+    radius: location.radius,
+    center: location.center,
+    isActive: location.isActive,
+    createdAt: location.createdAt,
+    updatedAt: location.updatedAt,
+    createdBy: location.createdBy ? {
+      name: location.createdBy.name,
+      email: location.createdBy.email
+    } : null
+  }));
 
-    res.json({ locations: formattedLocations, success: true });
-  } catch (error) {
-    console.error('Error fetching locations:', error);
-    res.status(500).json({ error: 'Failed to fetch locations', success: false });
-  }
+  res.json({ locations: formattedLocations, success: true });
 });
 
 // Get all geofences for the organization
 router.get('/geofences', authenticateToken, requireActiveSite, async (req, res) => {
-  try {
-    const orgId = req.user.organizationId || req.user.company || req.user.site;
-    const locations = await Location.find({
-      organizationId: orgId,
-      isActive: true
-    }).select('name coordinates address type radius center');
+  const orgId = req.user.organizationId || req.user.company || req.user.site;
+  const locations = await Location.find({
+    organizationId: orgId,
+    isActive: true
+  }).select('name coordinates address type radius center');
 
-    // Format for frontend consumption
-    const geofences = locations.map(location => ({
+  // Format for frontend consumption
+  const geofences = locations.map(location => ({
+    id: location._id,
+    name: location.name,
+    address: location.address,
+    coordinates: location.coordinates,
+    type: location.type,
+    radius: location.radius,
+    center: location.center
+  }));
+
+  res.json({ geofences, success: true });
+});
+
+// Create a new location/geofence (Admin only)
+router.post('/', authenticateToken, requireActiveSite, requireAdmin, validate(locationCreateSchema), async (req, res) => {
+  const { name, address, coordinates, type = 'polygon', radius, center } = req.data;
+  const orgId = req.user.organizationId || req.user.company || req.user.site;
+  const createdBy = req.user.id;
+
+  if (!orgId || !createdBy) {
+    return res.status(400).json({ error: 'Missing organization or user context', success: false });
+  }
+
+  // Validate polygon coordinates and size
+  if (type === 'polygon') {
+    if (!coordinates || coordinates.length < 3) {
+      return res.status(400).json({
+        error: 'Polygon requires at least 3 coordinate points',
+        success: false
+      });
+    }
+
+    // Validate polygon size (minimum 10m², maximum 1km²)
+    const area = calculatePolygonArea(coordinates);
+    if (area < 10) {
+      return res.status(400).json({
+        error: 'Polygon area too small (minimum 10m²)',
+        success: false
+      });
+    }
+    if (area > 1000000) {
+      return res.status(400).json({
+        error: 'Polygon area too large (maximum 1km²)',
+        success: false
+      });
+    }
+
+    // Validate coordinate bounds
+    for (const coord of coordinates) {
+      if (coord[0] < -180 || coord[0] > 180 || coord[1] < -90 || coord[1] > 90) {
+        return res.status(400).json({
+          error: 'Invalid coordinate bounds',
+          success: false
+        });
+      }
+    }
+  }
+
+  // Validate circle parameters and size
+  if (type === 'circle') {
+    if (!center || !radius) {
+      return res.status(400).json({
+        error: 'Circle requires center coordinates and radius',
+        success: false
+      });
+    }
+
+    // Validate circle size (minimum 5m radius, maximum 500m radius)
+    if (radius < 5) {
+      return res.status(400).json({
+        error: 'Circle radius too small (minimum 5m)',
+        success: false
+      });
+    }
+    if (radius > 500) {
+      return res.status(400).json({
+        error: 'Circle radius too large (maximum 500m)',
+        success: false
+      });
+    }
+  }
+
+  const coordsToSave = type === 'circle' ? [] : coordinates;
+
+  const location = new Location({
+    name,
+    address,
+    coordinates: coordsToSave,
+    type,
+    radius,
+    center,
+    createdBy,
+    organizationId: orgId
+  });
+
+  await location.save();
+
+  res.status(201).json({
+    location: {
       id: location._id,
       name: location.name,
       address: location.address,
@@ -90,117 +182,10 @@ router.get('/geofences', authenticateToken, requireActiveSite, async (req, res) 
       type: location.type,
       radius: location.radius,
       center: location.center
-    }));
-
-    res.json({ geofences, success: true });
-  } catch (error) {
-    console.error('Error fetching geofences:', error);
-    res.status(500).json({ error: 'Failed to fetch geofences', success: false });
-  }
-});
-
-// Create a new location/geofence (Admin only)
-router.post('/', authenticateToken, requireActiveSite, requireAdmin, validate(locationCreateSchema), async (req, res) => {
-  try {
-    const { name, address, coordinates, type = 'polygon', radius, center } = req.data;
-    const orgId = req.user.organizationId || req.user.company || req.user.site;
-    const createdBy = req.user.id;
-
-    if (!orgId || !createdBy) {
-      return res.status(400).json({ error: 'Missing organization or user context', success: false });
-    }
-
-    // Validate polygon coordinates and size
-    if (type === 'polygon') {
-      if (!coordinates || coordinates.length < 3) {
-        return res.status(400).json({
-          error: 'Polygon requires at least 3 coordinate points',
-          success: false
-        });
-      }
-
-      // Validate polygon size (minimum 10m², maximum 1km²)
-      const area = calculatePolygonArea(coordinates);
-      if (area < 10) {
-        return res.status(400).json({
-          error: 'Polygon area too small (minimum 10m²)',
-          success: false
-        });
-      }
-      if (area > 1000000) {
-        return res.status(400).json({
-          error: 'Polygon area too large (maximum 1km²)',
-          success: false
-        });
-      }
-
-      // Validate coordinate bounds
-      for (const coord of coordinates) {
-        if (coord[0] < -180 || coord[0] > 180 || coord[1] < -90 || coord[1] > 90) {
-          return res.status(400).json({
-            error: 'Invalid coordinate bounds',
-            success: false
-          });
-        }
-      }
-    }
-
-    // Validate circle parameters and size
-    if (type === 'circle') {
-      if (!center || !radius) {
-        return res.status(400).json({
-          error: 'Circle requires center coordinates and radius',
-          success: false
-        });
-      }
-
-      // Validate circle size (minimum 5m radius, maximum 500m radius)
-      if (radius < 5) {
-        return res.status(400).json({
-          error: 'Circle radius too small (minimum 5m)',
-          success: false
-        });
-      }
-      if (radius > 500) {
-        return res.status(400).json({
-          error: 'Circle radius too large (maximum 500m)',
-          success: false
-        });
-      }
-    }
-
-    const coordsToSave = type === 'circle' ? [] : coordinates;
-
-    const location = new Location({
-      name,
-      address,
-      coordinates: coordsToSave,
-      type,
-      radius,
-      center,
-      createdBy,
-      organizationId: orgId
-    });
-
-    await location.save();
-
-    res.status(201).json({
-      location: {
-        id: location._id,
-        name: location.name,
-        address: location.address,
-        coordinates: location.coordinates,
-        type: location.type,
-        radius: location.radius,
-        center: location.center
-      },
-      success: true,
-      message: 'Location created successfully'
-    });
-  } catch (error) {
-    console.error('Error creating location:', error);
-    res.status(500).json({ error: 'Failed to create location', success: false });
-  }
+    },
+    success: true,
+    message: 'Location created successfully'
+  });
 });
 
 // Update a location (Admin only)
@@ -212,227 +197,194 @@ router.put(
   validate(idParamsSchema, { source: 'params' }),
   validate(locationUpdateSchema),
   async (req, res) => {
-  try {
-    const { name, address, coordinates, type, radius, center, isActive } = req.data;
+  const { name, address, coordinates, type, radius, center, isActive } = req.data;
 
-    const orgId = req.user.organizationId || req.user.company || req.user.site;
-    const coordsToSave = type === 'circle' ? [] : coordinates;
+  const orgId = req.user.organizationId || req.user.company || req.user.site;
+  const coordsToSave = type === 'circle' ? [] : coordinates;
 
-    const location = await Location.findOneAndUpdate(
-      { _id: req.params.id, organizationId: orgId },
-      {
-        name,
-        address,
-        coordinates: coordsToSave,
-        type,
-        radius,
-        center,
-        isActive
-      },
-      { new: true }
-    );
+  const location = await Location.findOneAndUpdate(
+    { _id: req.params.id, organizationId: orgId },
+    {
+      name,
+      address,
+      coordinates: coordsToSave,
+      type,
+      radius,
+      center,
+      isActive
+    },
+    { new: true }
+  );
 
-    if (!location) {
-      return res.status(404).json({ error: 'Location not found', success: false });
-    }
-
-    res.json({
-      location: {
-        id: location._id,
-        name: location.name,
-        address: location.address,
-        coordinates: location.coordinates,
-        type: location.type,
-        radius: location.radius,
-        center: location.center,
-        isActive: location.isActive
-      },
-      success: true,
-      message: 'Location updated successfully'
-    });
-  } catch (error) {
-    console.error('Error updating location:', error);
-    res.status(500).json({ error: 'Failed to update location', success: false });
+  if (!location) {
+    return res.status(404).json({ error: 'Location not found', success: false });
   }
+
+  res.json({
+    location: {
+      id: location._id,
+      name: location.name,
+      address: location.address,
+      coordinates: location.coordinates,
+      type: location.type,
+      radius: location.radius,
+      center: location.center,
+      isActive: location.isActive
+    },
+    success: true,
+    message: 'Location updated successfully'
+  });
 });
 
 // Delete a location (Admin only)
 router.delete('/:id', authenticateToken, requireActiveSite, requireAdmin, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
-  try {
-    const orgId = req.user.organizationId || req.user.company || req.user.site;
-    const location = await Location.findOneAndUpdate(
-      { _id: req.params.id, organizationId: orgId },
-      { isActive: false },
-      { new: true }
-    );
+  const orgId = req.user.organizationId || req.user.company || req.user.site;
+  const location = await Location.findOneAndUpdate(
+    { _id: req.params.id, organizationId: orgId },
+    { isActive: false },
+    { new: true }
+  );
 
-    if (!location) {
-      return res.status(404).json({ error: 'Location not found', success: false });
-    }
-
-    res.json({
-      success: true,
-      message: 'Location deactivated successfully'
-    });
-  } catch (error) {
-    console.error('Error deleting location:', error);
-    res.status(500).json({ error: 'Failed to delete location', success: false });
+  if (!location) {
+    return res.status(404).json({ error: 'Location not found', success: false });
   }
+
+  res.json({
+    success: true,
+    message: 'Location deactivated successfully'
+  });
 });
 
 // Get attendance history for current user with location info
 router.get('/attendance/history', authenticateToken, requireActiveSite, validate(attendanceHistoryQuerySchema, { source: 'query' }), async (req, res) => {
-  try {
-    const { startDate, endDate, locationId } = req.data;
-    const userId = req.user.id || req.user._id || req.user.userId;
+  const { startDate, endDate, locationId } = req.data;
+  const userId = req.user.id || req.user._id || req.user.userId;
 
-    if (!userId) {
-      return res.status(401).json({ error: 'User not authenticated', success: false });
-    }
+  if (!userId) {
+    return res.status(401).json({ error: 'User not authenticated', success: false });
+  }
 
-    let query = {
-      employee: userId,
-      // Only show completed attendance records (those that have been checked out)
-      status: 'completed',
-      clockOutTime: { $exists: true, $ne: null }
+  let query = {
+    employee: userId,
+    status: 'completed',
+    clockOutTime: { $exists: true, $ne: null }
+  };
+
+  if (startDate && endDate) {
+    // Parse dates in UTC
+    const startDateUTC = new Date(startDate + 'T00:00:00.000Z');
+    const endDateUTC = new Date(endDate + 'T23:59:59.999Z');
+
+    // Expand range to account for timezone offsets (up to +/- 12 hours = 1 day)
+    startDateUTC.setUTCDate(startDateUTC.getUTCDate() - 1);
+    endDateUTC.setUTCDate(endDateUTC.getUTCDate() + 1);
+    endDateUTC.setUTCHours(23, 59, 59, 999);
+
+    query.date = {
+      $gte: startDateUTC,
+      $lte: endDateUTC
     };
 
-    if (startDate && endDate) {
-      // The date field is stored as midnight in server timezone, which may differ from UTC
-      // Instead of relying on the date field (which has timezone issues), 
-      // we'll query by clockInTime/clockOutTime which are more reliable
-      // But we still need the date field for the query, so we'll use a wide range
-      
-      // Parse dates in UTC
-      const startDateUTC = new Date(startDate + 'T00:00:00.000Z');
-      const endDateUTC = new Date(endDate + 'T23:59:59.999Z');
-      
-      // Expand range to account for timezone offsets (up to +/- 12 hours = 1 day)
-      // Go back 1 day and forward 1 day to catch all records
-      startDateUTC.setUTCDate(startDateUTC.getUTCDate() - 1);
-      endDateUTC.setUTCDate(endDateUTC.getUTCDate() + 1);
-      endDateUTC.setUTCHours(23, 59, 59, 999);
-      
-      // Query by date field with expanded range
-      query.date = {
-        $gte: startDateUTC,
-        $lte: endDateUTC
-      };
-      
-      // Also filter by clockOutTime to ensure we only get records within the actual date range
-      // This is more reliable than the date field
-      query.clockOutTime = {
-        $gte: new Date(startDate + 'T00:00:00.000Z'),
-        $lte: new Date(endDate + 'T23:59:59.999Z')
-      };
-    }
-
-    if (locationId) {
-      query['location.locationId'] = locationId;
-    }
-
-    const attendanceRecords = await Attendance.find(query)
-      .populate('location.locationId', 'name address')
-      .sort({ date: -1, clockInTime: -1 })
-      .limit(100);
-
-    const formattedRecords = attendanceRecords.map(record => ({
-      id: record._id.toString(),
-      date: record.date,
-      clockInTime: record.clockInTime,
-      clockOutTime: record.clockOutTime,
-      totalHours: record.totalHours,
-      location: {
-        locationName: record.location?.locationName || record.location?.locationId?.name || 'Unknown Location',
-        locationId: record.location?.locationId?._id?.toString() || record.location?.locationId?.toString() || null,
-        address: record.location?.address || record.location?.locationId?.address || null,
-        latitude: record.location?.latitude,
-        longitude: record.location?.longitude,
-        geofenceTriggered: record.location?.geofenceTriggered || false
-      },
-      status: record.status,
-      notes: record.notes
-    }));
-
-    res.json({
-      records: formattedRecords,
-      success: true
-    });
-  } catch (error) {
-    console.error('Error fetching attendance history:', error);
-    res.status(500).json({ error: 'Failed to fetch attendance history', success: false });
+    // Also filter by clockOutTime to ensure we only get records within the actual date range
+    query.clockOutTime = {
+      $gte: new Date(startDate + 'T00:00:00.000Z'),
+      $lte: new Date(endDate + 'T23:59:59.999Z')
+    };
   }
+
+  if (locationId) {
+    query['location.locationId'] = locationId;
+  }
+
+  const attendanceRecords = await Attendance.find(query)
+    .populate('location.locationId', 'name address')
+    .sort({ date: -1, clockInTime: -1 })
+    .limit(100);
+
+  const formattedRecords = attendanceRecords.map(record => ({
+    id: record._id.toString(),
+    date: record.date,
+    clockInTime: record.clockInTime,
+    clockOutTime: record.clockOutTime,
+    totalHours: record.totalHours,
+    location: {
+      locationName: record.location?.locationName || record.location?.locationId?.name || 'Unknown Location',
+      locationId: record.location?.locationId?._id?.toString() || record.location?.locationId?.toString() || null,
+      address: record.location?.address || record.location?.locationId?.address || null,
+      latitude: record.location?.latitude,
+      longitude: record.location?.longitude,
+      geofenceTriggered: record.location?.geofenceTriggered || false
+    },
+    status: record.status,
+    notes: record.notes
+  }));
+
+  res.json({
+    records: formattedRecords,
+    success: true
+  });
 });
 
 // Check if user is currently checked in at any location
 router.get('/attendance/current', authenticateToken, requireActiveSite, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    
-    const currentAttendance = await Attendance.findOne({
+  const userId = req.user.userId;
+
+  const currentAttendance = await Attendance.findOne({
+    employee: userId,
+    status: 'active'
+  }).populate('location.locationId', 'name address');
+
+  if (!currentAttendance) {
+    const now = new Date();
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+    const tomorrow = new Date(today);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+
+    const lastCheckout = await Attendance.findOne({
       employee: userId,
-      status: 'active'
-    }).populate('location.locationId', 'name address');
-
-    if (!currentAttendance) {
-      // Check if user has checked out today
-      // Use clockOutTime to determine if checkout was today (more reliable than date field)
-      // Use UTC to ensure consistent date comparison
-      const now = new Date();
-      const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
-      const tomorrow = new Date(today);
-      tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-
-      // Find the most recent checkout where clockOutTime is from today (UTC)
-      const lastCheckout = await Attendance.findOne({
-        employee: userId,
-        status: 'completed',
-        clockOutTime: { 
-          $exists: true,
-          $gte: today,
-          $lt: tomorrow
-        }
-      })
-        .sort({ clockOutTime: -1 })
-        .limit(1);
-
-      if (lastCheckout && lastCheckout.clockOutTime) {
-        return res.json({
-          isCheckedIn: false,
-          isCheckedOut: true,
-          checkOutTime: lastCheckout.clockOutTime,
-          currentAttendance: null,
-          success: true
-        });
+      status: 'completed',
+      clockOutTime: {
+        $exists: true,
+        $gte: today,
+        $lt: tomorrow
       }
+    })
+      .sort({ clockOutTime: -1 })
+      .limit(1);
 
+    if (lastCheckout && lastCheckout.clockOutTime) {
       return res.json({
         isCheckedIn: false,
-        isCheckedOut: false,
+        isCheckedOut: true,
+        checkOutTime: lastCheckout.clockOutTime,
         currentAttendance: null,
         success: true
       });
     }
 
-    res.json({
-      isCheckedIn: true,
+    return res.json({
+      isCheckedIn: false,
       isCheckedOut: false,
-      currentAttendance: {
-        id: currentAttendance._id,
-        checkInTime: currentAttendance.clockInTime,
-        location: {
-          name: currentAttendance.location?.locationName || currentAttendance.location?.locationId?.name,
-          address: currentAttendance.location?.address || currentAttendance.location?.locationId?.address,
-          latitude: currentAttendance.location?.latitude,
-          longitude: currentAttendance.location?.longitude
-        }
-      },
+      currentAttendance: null,
       success: true
     });
-  } catch (error) {
-    console.error('Error checking current attendance:', error);
-    res.status(500).json({ error: 'Failed to check current attendance', success: false });
   }
+
+  res.json({
+    isCheckedIn: true,
+    isCheckedOut: false,
+    currentAttendance: {
+      id: currentAttendance._id,
+      checkInTime: currentAttendance.clockInTime,
+      location: {
+        name: currentAttendance.location?.locationName || currentAttendance.location?.locationId?.name,
+        address: currentAttendance.location?.address || currentAttendance.location?.locationId?.address,
+        latitude: currentAttendance.location?.latitude,
+        longitude: currentAttendance.location?.longitude
+      }
+    },
+    success: true
+  });
 });
 
 // Calculate polygon area using shoelace formula (approximate for small areas)

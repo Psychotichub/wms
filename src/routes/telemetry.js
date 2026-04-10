@@ -1,4 +1,5 @@
 const express = require('express');
+const logger = require('../config/logger').child({ module: 'telemetry' });
 
 const router = express.Router();
 
@@ -31,11 +32,9 @@ router.post('/client-error', (req, res) => {
     extra,
     platform,
     ip: req.ip,
-    at: new Date().toISOString()
   };
 
-  // Lightweight logging: write to stdout. Hook this into a log aggregator if needed.
-  console.warn('[client-error]', JSON.stringify(payload));
+  logger.warn(payload, 'Client error reported');
 
   return res.status(204).send();
 });

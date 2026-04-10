@@ -1,4 +1,8 @@
 const mongoose = require('mongoose');
+const logger = require('./logger');
+
+const MAX_RETRIES = 3;
+const INITIAL_BACKOFF_MS = 2000;
 
 const getMongoHost = (mongoUri) => {
   if (!mongoUri) {
@@ -47,6 +51,8 @@ const resolveMongoUri = (appEnv) => {
   return process.env.MONGO_URI;
 };
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const dbConnect = async () => {
   const appEnv = (process.env.APP_ENV || '').toLowerCase();
   const envLabel = appEnv === 'prod' || appEnv === 'production' ? 'production' : 'development';
@@ -56,17 +62,43 @@ const dbConnect = async () => {
     throw new Error('MONGO_URI is not set');
   }
 
-  try {
-    await mongoose.connect(uri);
-    const connectedDbName = mongoose.connection?.name || 'unknown-db';
-    console.log(
-      `MongoDB connected (${envLabel}, ${getMongoLocationLabel(uri)}/${connectedDbName})`
-    );
-  } catch (err) {
-    console.error('Mongo connection error', err);
-    process.exit(1);
+  // Connection event listeners
+  mongoose.connection.on('disconnected', () => {
+    logger.warn('MongoDB disconnected');
+  });
+  mongoose.connection.on('reconnected', () => {
+    logger.info('MongoDB reconnected');
+  });
+  mongoose.connection.on('error', (err) => {
+    logger.error({ err }, 'MongoDB connection error');
+  });
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      await mongoose.connect(uri, {
+        maxPoolSize: 10,
+      });
+      const connectedDbName = mongoose.connection?.name || 'unknown-db';
+      logger.info(
+        `MongoDB connected (${envLabel}, ${getMongoLocationLabel(uri)}/${connectedDbName})`
+      );
+      return;
+    } catch (err) {
+      logger.error(
+        { err, attempt, maxRetries: MAX_RETRIES },
+        `MongoDB connection attempt ${attempt}/${MAX_RETRIES} failed`
+      );
+
+      if (attempt === MAX_RETRIES) {
+        logger.fatal('All MongoDB connection attempts exhausted, exiting');
+        process.exit(1);
+      }
+
+      const backoff = INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
+      logger.info(`Retrying in ${backoff}ms…`);
+      await sleep(backoff);
+    }
   }
 };
 
 module.exports = dbConnect;
-

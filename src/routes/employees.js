@@ -82,7 +82,8 @@ const geofenceCheckOutSchema = z.object({
   latitude: z.union([z.number(), z.string()]).optional(),
   longitude: z.union([z.number(), z.string()]).optional(),
   accuracy: z.union([z.number(), z.string()]).optional(),
-  timestamp: z.string().optional()
+  timestamp: z.string().optional(),
+  isAutomatic: z.boolean().optional()
 });
 
 const locationPreferencesSchema = z.object({
@@ -102,15 +103,14 @@ const requireManager = (req, res, next) => {
 
 // GET /api/employees - Get all employees with optional filtering
 router.get('/', requireAuth, async (req, res) => {
-  try {
-    const {
-      role,
-      department,
-      isActive = 'true',
-      search,
-      page = 1,
-      limit = 20
-    } = req.query;
+  const {
+    role,
+    department,
+    isActive = 'true',
+    search,
+    page = 1,
+    limit = 20
+  } = req.query;
 
     const query = {};
 
@@ -144,29 +144,24 @@ router.get('/', requireAuth, async (req, res) => {
       .skip((page - 1) * limit)
       .select('-__v');
 
-    const total = await Employee.countDocuments(query);
+  const total = await Employee.countDocuments(query);
 
-    res.json({
-      employees,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / limit)
-      }
-    });
-  } catch (error) {
-    console.error('Error fetching employees:', error);
-    res.status(500).json({ error: 'Failed to fetch employees' });
-  }
+  res.json({
+    employees,
+    pagination: {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total,
+      pages: Math.ceil(total / limit)
+    }
+  });
 });
 
 // GET /api/employees/active-locations - Get all active employees with their clock-in locations (for map view)
 // NOTE: This route must be defined BEFORE /:id to avoid route conflicts
 router.get('/active-locations', requireAuth, async (req, res) => {
-  try {
-    const company = req.user?.company;
-    const site = req.user?.site;
+  const company = req.user?.company;
+  const site = req.user?.site;
     
     if (!company) {
       return res.status(400).json({ 
@@ -206,7 +201,6 @@ router.get('/active-locations', requireAuth, async (req, res) => {
           }
           return null;
         } catch (err) {
-          console.warn('Error processing employee ID:', err);
           return null;
         }
       })
@@ -237,16 +231,9 @@ router.get('/active-locations', requireAuth, async (req, res) => {
     }
 
     // Fetch user data for all users in this organization
-    let users;
-    try {
-      users = await User.find(orgFilter)
-        .select('name email role')
-        .lean();
-    } catch (queryError) {
-      console.error('Error querying users:', queryError);
-      console.error('Query filter:', JSON.stringify(orgFilter, null, 2));
-      throw queryError;
-    }
+    const users = await User.find(orgFilter)
+      .select('name email role')
+      .lean();
 
     // Create a map of user ID to user data
     const userMap = new Map(users.map(u => [u._id.toString(), u]));
@@ -279,7 +266,7 @@ router.get('/active-locations', requireAuth, async (req, res) => {
             elapsedTime = Date.now() - clockInTime.getTime();
           }
         } catch (dateError) {
-          console.warn('Error calculating elapsed time:', dateError);
+          // non-critical — default elapsedTime of 0 is used
         }
         
         return {
@@ -300,90 +287,76 @@ router.get('/active-locations', requireAuth, async (req, res) => {
       count: employeeLocations.length,
       success: true
     });
-  } catch (error) {
-    console.error('Error fetching active employee locations:', error);
-    console.error('Error stack:', error.stack);
-    res.status(500).json({ 
-      error: 'Failed to fetch active employee locations', 
-      success: false,
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
-    });
-  }
 });
 
 // GET /api/employees/preferences - Get current user's location preferences
 // NOTE: This route must be defined BEFORE /:id to avoid route conflicts
 router.get('/preferences', requireAuth, async (req, res) => {
-  try {
-    const userId = req.user?.id || req.user?._id || req.user?.userId;
-    const userRole = req.user?.role;
-    const userEmail = req.user?.email;
-    const userName = req.user?.name;
+  const userId = req.user?.id || req.user?._id || req.user?.userId;
+  const userRole = req.user?.role;
+  const userEmail = req.user?.email;
+  const userName = req.user?.name;
 
-    if (!userId) {
-      return res.status(401).json({ error: 'User not authenticated' });
-    }
-
-    // Get or create Employee record
-    const employee = await getOrCreateEmployeeForUser(userId, userRole, userEmail, userName);
-    
-    if (!employee) {
-      return res.status(404).json({ 
-        error: 'Employee record not found. Please ensure your user account is linked to an employee record.' 
-      });
-    }
-
-    // Initialize locationPreferences if it doesn't exist
-    if (!employee.locationPreferences) {
-      employee.locationPreferences = {
-        selectedGeofences: [],
-        workingHours: [],
-        lastUpdated: new Date()
-      };
-    }
-
-    // Initialize workingHours array if it doesn't exist (for backward compatibility)
-    if (!employee.locationPreferences.workingHours || !Array.isArray(employee.locationPreferences.workingHours)) {
-      employee.locationPreferences.workingHours = [];
-    }
-
-    // Find the default location (isDefault: true) or return null
-    const defaultLocation = employee.locationPreferences.selectedGeofences?.find(
-      loc => loc.isDefault === true
-    ) || null;
-
-    // Find the default working hours (isDefault: true) or return default values
-    const defaultWorkingHours = employee.locationPreferences.workingHours?.find(
-      wh => wh.isDefault === true
-    ) || { startTime: '08:00', endTime: '16:30' };
-
-    res.json({
-      preferences: {
-        selectedGeofenceId: defaultLocation?.geofenceId 
-          ? defaultLocation.geofenceId.toString() 
-          : null,
-        selectedGeofences: employee.locationPreferences.selectedGeofences?.map(loc => ({
-          geofenceId: loc.geofenceId.toString(),
-          isDefault: loc.isDefault,
-          addedAt: loc.addedAt
-        })) || [],
-        workingHours: {
-          startTime: defaultWorkingHours.startTime,
-          endTime: defaultWorkingHours.endTime
-        },
-        workingHoursList: employee.locationPreferences.workingHours?.map(wh => ({
-          startTime: wh.startTime,
-          endTime: wh.endTime,
-          isDefault: wh.isDefault,
-          addedAt: wh.addedAt
-        })) || []
-      },
-      success: true
-    });
-  } catch (error) {
-    console.error('Error fetching location preferences:', error);
-    res.status(500).json({ error: 'Failed to fetch location preferences' });
+  if (!userId) {
+    return res.status(401).json({ error: 'User not authenticated' });
   }
+
+  // Get or create Employee record
+  const employee = await getOrCreateEmployeeForUser(userId, userRole, userEmail, userName);
+  
+  if (!employee) {
+    return res.status(404).json({ 
+      error: 'Employee record not found. Please ensure your user account is linked to an employee record.' 
+    });
+  }
+
+  // Initialize locationPreferences if it doesn't exist
+  if (!employee.locationPreferences) {
+    employee.locationPreferences = {
+      selectedGeofences: [],
+      workingHours: [],
+      lastUpdated: new Date()
+    };
+  }
+
+  // Initialize workingHours array if it doesn't exist (for backward compatibility)
+  if (!employee.locationPreferences.workingHours || !Array.isArray(employee.locationPreferences.workingHours)) {
+    employee.locationPreferences.workingHours = [];
+  }
+
+  // Find the default location (isDefault: true) or return null
+  const defaultLocation = employee.locationPreferences.selectedGeofences?.find(
+    loc => loc.isDefault === true
+  ) || null;
+
+  // Find the default working hours (isDefault: true) or return default values
+  const defaultWorkingHours = employee.locationPreferences.workingHours?.find(
+    wh => wh.isDefault === true
+  ) || { startTime: '08:00', endTime: '16:30' };
+
+  res.json({
+    preferences: {
+      selectedGeofenceId: defaultLocation?.geofenceId 
+        ? defaultLocation.geofenceId.toString() 
+        : null,
+      selectedGeofences: employee.locationPreferences.selectedGeofences?.map(loc => ({
+        geofenceId: loc.geofenceId.toString(),
+        isDefault: loc.isDefault,
+        addedAt: loc.addedAt
+      })) || [],
+      workingHours: {
+        startTime: defaultWorkingHours.startTime,
+        endTime: defaultWorkingHours.endTime
+      },
+      workingHoursList: employee.locationPreferences.workingHours?.map(wh => ({
+        startTime: wh.startTime,
+        endTime: wh.endTime,
+        isDefault: wh.isDefault,
+        addedAt: wh.addedAt
+      })) || []
+    },
+    success: true
+  });
 });
 
 // PUT /api/employees/preferences - Update location preferences
@@ -548,56 +521,48 @@ router.put('/preferences', requireAuth, validate(locationPreferencesSchema), asy
       message: 'Location preferences updated successfully'
     });
   } catch (error) {
-    console.error('Error updating location preferences:', error);
-    
     if (error.name === 'ValidationError') {
       return res.status(400).json({ error: error.message });
     }
-
-    res.status(500).json({ error: 'Failed to update location preferences' });
+    throw error;
   }
 });
 
 // GET /api/employees/:id - Get single employee with productivity metrics
 router.get('/:id', requireAuth, async (req, res) => {
-  try {
-    const employee = await Employee.findById(req.params.id)
-      .populate('manager', 'name email')
-      .populate({
-        path: 'manager',
-        select: 'name'
-      });
-
-    if (!employee) {
-      return res.status(404).json({ error: 'Employee not found' });
-    }
-
-    // Get recent attendance records for productivity calculation
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-    const recentAttendance = await Attendance.find({
-      employee: employee._id,
-      date: { $gte: thirtyDaysAgo }
-    }).sort({ date: -1 });
-
-    // Calculate productivity metrics
-    const totalHours = recentAttendance.reduce((sum, record) => sum + (record.totalHours || 0), 0);
-    const averageHoursPerDay = recentAttendance.length > 0 ? totalHours / recentAttendance.length : 0;
-
-    res.json({
-      employee,
-      recentAttendance: recentAttendance.slice(0, 10), // Last 10 records
-      productivityStats: {
-        totalHoursWorked: totalHours,
-        averageHoursPerDay: averageHoursPerDay,
-        attendanceDays: recentAttendance.length
-      }
+  const employee = await Employee.findById(req.params.id)
+    .populate('manager', 'name email')
+    .populate({
+      path: 'manager',
+      select: 'name'
     });
-  } catch (error) {
-    console.error('Error fetching employee:', error);
-    res.status(500).json({ error: 'Failed to fetch employee' });
+
+  if (!employee) {
+    return res.status(404).json({ error: 'Employee not found' });
   }
+
+  // Get recent attendance records for productivity calculation
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const recentAttendance = await Attendance.find({
+    employee: employee._id,
+    date: { $gte: thirtyDaysAgo }
+  }).sort({ date: -1 });
+
+  // Calculate productivity metrics
+  const totalHours = recentAttendance.reduce((sum, record) => sum + (record.totalHours || 0), 0);
+  const averageHoursPerDay = recentAttendance.length > 0 ? totalHours / recentAttendance.length : 0;
+
+  res.json({
+    employee,
+    recentAttendance: recentAttendance.slice(0, 10),
+    productivityStats: {
+      totalHoursWorked: totalHours,
+      averageHoursPerDay: averageHoursPerDay,
+      attendanceDays: recentAttendance.length
+    }
+  });
 });
 
 // POST /api/employees - Create new employee (and optionally User account)
@@ -711,11 +676,10 @@ router.post('/', requireAuth, requireManager, validate(employeeCreateSchema), as
         : 'Employee created successfully (no user account - employee cannot log in)'
     });
   } catch (error) {
-    console.error('Error creating employee:', error);
     if (error.name === 'ValidationError') {
       return res.status(400).json({ error: error.message });
     }
-    res.status(500).json({ error: 'Failed to create employee' });
+    throw error;
   }
 });
 
@@ -869,161 +833,139 @@ router.put(
         : 'Employee updated successfully'
     });
   } catch (error) {
-    console.error('Error updating employee:', error);
     if (error.name === 'ValidationError') {
       return res.status(400).json({ error: error.message });
     }
-    res.status(500).json({ error: 'Failed to update employee' });
+    throw error;
   }
 });
 
 // DELETE /api/employees/:id - Delete employee and associated user account (admin only)
 router.delete('/:id', requireAuth, requireActiveSite, requireAdmin, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
-  try {
-    const employee = await Employee.findById(req.params.id);
-    if (!employee) {
-      return res.status(404).json({ error: 'Employee not found' });
-    }
-
-    // Delete associated user account if it exists
-    if (employee.user) {
-      await User.findByIdAndDelete(employee.user);
-    }
-
-    // Delete the employee record
-    await Employee.findByIdAndDelete(req.params.id);
-
-    res.json({ message: 'Employee and associated account deleted successfully' });
-  } catch (error) {
-    console.error('Error deleting employee:', error);
-    res.status(500).json({ error: 'Failed to delete employee' });
+  const employee = await Employee.findById(req.params.id);
+  if (!employee) {
+    return res.status(404).json({ error: 'Employee not found' });
   }
+
+  // Delete associated user account if it exists
+  if (employee.user) {
+    await User.findByIdAndDelete(employee.user);
+  }
+
+  // Delete the employee record
+  await Employee.findByIdAndDelete(req.params.id);
+
+  res.json({ message: 'Employee and associated account deleted successfully' });
 });
 
 // POST /api/employees/:id/clock-in - Clock in employee
 router.post('/:id/clock-in', requireAuth, async (req, res) => {
-  try {
-    const { location, notes } = req.body;
-    const employeeId = req.params.id;
+  const { location, notes } = req.body;
+  const employeeId = req.params.id;
 
-    const employee = await Employee.findById(employeeId);
-    if (!employee) {
-      return res.status(404).json({ error: 'Employee not found' });
-    }
-
-    // Check if employee is already clocked in
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const existingAttendance = await Attendance.findOne({
-      employee: employeeId,
-      date: today,
-      status: { $in: ['active', 'on_break'] }
-    });
-
-    if (existingAttendance) {
-      return res.status(400).json({
-        error: 'Employee is already clocked in',
-        attendance: existingAttendance
-      });
-    }
-
-    const attendance = new Attendance({
-      employee: employeeId,
-      date: today,
-      clockInTime: new Date(),
-      location,
-      notes,
-      status: 'active'
-    });
-
-    await attendance.save();
-    await attendance.populate('employee', 'name email');
-
-    res.status(201).json({
-      attendance,
-      message: 'Clocked in successfully'
-    });
-  } catch (error) {
-    console.error('Error clocking in:', error);
-    res.status(500).json({ error: 'Failed to clock in' });
+  const employee = await Employee.findById(employeeId);
+  if (!employee) {
+    return res.status(404).json({ error: 'Employee not found' });
   }
+
+  // Check if employee is already clocked in
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const existingAttendance = await Attendance.findOne({
+    employee: employeeId,
+    date: today,
+    status: { $in: ['active', 'on_break'] }
+  });
+
+  if (existingAttendance) {
+    return res.status(400).json({
+      error: 'Employee is already clocked in',
+      attendance: existingAttendance
+    });
+  }
+
+  const attendance = new Attendance({
+    employee: employeeId,
+    date: today,
+    clockInTime: new Date(),
+    location,
+    notes,
+    status: 'active'
+  });
+
+  await attendance.save();
+  await attendance.populate('employee', 'name email');
+
+  res.status(201).json({
+    attendance,
+    message: 'Clocked in successfully'
+  });
 });
 
 // POST /api/employees/:id/clock-out - Clock out employee
 router.post('/:id/clock-out', requireAuth, async (req, res) => {
-  try {
-    const { location, notes } = req.body;
-    const employeeId = req.params.id;
+  const { location, notes } = req.body;
+  const employeeId = req.params.id;
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-    const attendance = await Attendance.findOne({
-      employee: employeeId,
-      date: today,
-      status: 'active'
-    });
+  const attendance = await Attendance.findOne({
+    employee: employeeId,
+    date: today,
+    status: 'active'
+  });
 
-    if (!attendance) {
-      return res.status(404).json({ error: 'No active clock-in found for today' });
-    }
-
-    await attendance.clockOut(location, notes);
-    await attendance.populate('employee', 'name email');
-
-    res.json({
-      attendance,
-      message: 'Clocked out successfully'
-    });
-  } catch (error) {
-    console.error('Error clocking out:', error);
-    res.status(500).json({ error: 'Failed to clock out' });
+  if (!attendance) {
+    return res.status(404).json({ error: 'No active clock-in found for today' });
   }
+
+  await attendance.clockOut(location, notes);
+  await attendance.populate('employee', 'name email');
+
+  res.json({
+    attendance,
+    message: 'Clocked out successfully'
+  });
 });
 
 // GET /api/employees/:id/attendance - Get employee attendance records
 router.get('/:id/attendance', requireAuth, async (req, res) => {
-  try {
-    const { startDate, endDate, page = 1, limit = 20 } = req.query;
+  const { startDate, endDate, page = 1, limit = 20 } = req.query;
 
-    const query = { employee: req.params.id };
+  const query = { employee: req.params.id };
 
-    if (startDate && endDate) {
-      query.date = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
-      };
-    }
-
-    const attendance = await Attendance.find(query)
-      .populate('employee', 'name email')
-      .populate('approvedBy', 'name')
-      .sort({ date: -1, clockInTime: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
-
-    const total = await Attendance.countDocuments(query);
-
-    res.json({
-      attendance,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / limit)
-      }
-    });
-  } catch (error) {
-    console.error('Error fetching attendance:', error);
-    res.status(500).json({ error: 'Failed to fetch attendance records' });
+  if (startDate && endDate) {
+    query.date = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
   }
+
+  const attendance = await Attendance.find(query)
+    .populate('employee', 'name email')
+    .populate('approvedBy', 'name')
+    .sort({ date: -1, clockInTime: -1 })
+    .limit(limit * 1)
+    .skip((page - 1) * limit);
+
+  const total = await Attendance.countDocuments(query);
+
+  res.json({
+    attendance,
+    pagination: {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total,
+      pages: Math.ceil(total / limit)
+    }
+  });
 });
 
 // POST /api/employees/attendance/checkin - Geofence-based check-in
 router.post('/attendance/checkin', requireAuth, validate(geofenceCheckInSchema), async (req, res) => {
-  try {
-    const { locationId, locationName, latitude, longitude, accuracy, timestamp, notes, deviceInfo } = req.data;
+  const { locationId, locationName, latitude, longitude, accuracy, timestamp, notes, deviceInfo } = req.data;
 
     // Validate required fields
     if (!latitude || !longitude) {
@@ -1180,7 +1122,6 @@ router.post('/attendance/checkin', requireAuth, validate(geofenceCheckInSchema),
         });
       }
     } catch (notifyError) {
-      console.error('Failed to send check-in notification:', notifyError);
       // Don't fail the check-in if notification fails
     }
 
@@ -1194,25 +1135,18 @@ router.post('/attendance/checkin', requireAuth, validate(geofenceCheckInSchema),
       success: true,
       message: `Checked in to ${locationName}`
     });
-  } catch (error) {
-    console.error('Error during geofence check-in:', error);
-    res.status(500).json({ error: 'Failed to check in', success: false });
-  }
 });
 
 // POST /api/employees/attendance/checkout - Geofence-based check-out
 router.post('/attendance/checkout', requireAuth, validate(geofenceCheckOutSchema), async (req, res) => {
-  try {
-    const {
-      locationId,
-      latitude,
-      longitude,
-      accuracy,
-      timestamp: _timestamp
-    } = req.data;
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+  const {
+    locationId,
+    latitude,
+    longitude,
+    accuracy,
+    timestamp: _timestamp,
+    isAutomatic
+  } = req.data;
 
     const userId = req.user.id || req.user.userId;
     const _orgId = req.user.organizationId || req.user.company || req.user.site;
@@ -1224,41 +1158,32 @@ router.post('/attendance/checkout', requireAuth, validate(geofenceCheckOutSchema
       });
     }
 
-    console.log('[Checkout] Finding attendance for user:', userId, 'date:', today);
-
+    // Find any active attendance for this user (no date filter — prevents timezone mismatch)
     const attendance = await Attendance.findOne({
       employee: userId,
-      date: today,
       status: 'active'
     });
 
     if (!attendance) {
-      console.log('[Checkout] No active attendance found for user:', userId);
       return res.status(404).json({
         error: 'No active check-in found',
         success: false
       });
     }
 
-    console.log('[Checkout] Found attendance:', attendance._id);
-
     // Update location info for check-out (only update coordinates, preserve rest)
     if (latitude !== undefined && longitude !== undefined) {
-      // Use Mongoose's set method to update only specific fields, avoiding undefined issues
       attendance.location.latitude = latitude;
       attendance.location.longitude = longitude;
       if (accuracy !== undefined) {
         attendance.location.accuracy = accuracy;
       }
-      // Mark the location field as modified so Mongoose saves it
       attendance.markModified('location');
     }
 
-    console.log('[Checkout] Calling clockOut...');
-    await attendance.clockOut(null, null, true); // true = manual checkout
-    console.log('[Checkout] clockOut completed, populating employee...');
+    const isManual = !isAutomatic;
+    await attendance.clockOut(null, null, isManual);
     await attendance.populate('employee', 'name email');
-    console.log('[Checkout] Employee populated');
 
     // Send notification to user about check-out
     try {
@@ -1294,7 +1219,6 @@ router.post('/attendance/checkout', requireAuth, validate(geofenceCheckOutSchema
         });
       }
     } catch (notifyError) {
-      console.error('Failed to send check-out notification:', notifyError);
       // Don't fail the check-out if notification fails
     }
 
@@ -1351,10 +1275,9 @@ router.post('/attendance/checkout', requireAuth, validate(geofenceCheckOutSchema
         );
       }
     } catch (notifyError) {
-      console.error('Failed to send daily report reminder:', notifyError);
+      // Don't fail checkout if daily report reminder fails
     }
 
-    console.log('[Checkout] Checkout successful, sending response');
     res.json({
       attendance: {
         id: attendance._id,
@@ -1366,94 +1289,73 @@ router.post('/attendance/checkout', requireAuth, validate(geofenceCheckOutSchema
       success: true,
       message: 'Checked out successfully'
     });
-  } catch (error) {
-    console.error('[Checkout] Error during geofence check-out:', error);
-    console.error('[Checkout] Error stack:', error.stack);
-    console.error('[Checkout] Error details:', {
-      message: error.message,
-      name: error.name,
-      code: error.code
-    });
-    res.status(500).json({ 
-      error: 'Failed to check out', 
-      success: false,
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
 });
 
 // GET /api/employees/attendance/current - Get current attendance status
 router.get('/attendance/current', requireAuth, async (req, res) => {
-  try {
-    const userId = req.user.id || req.user.userId;
+  const userId = req.user.id || req.user.userId;
 
-    const attendance = await Attendance.findOne({
+  const attendance = await Attendance.findOne({
+    employee: userId,
+    status: 'active'
+  }).populate('employee', 'name email');
+
+  if (!attendance) {
+    // Use clockOutTime to determine if checkout was today (more reliable than date field)
+    // Use UTC to ensure consistent date comparison
+    const now = new Date();
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+    const tomorrow = new Date(today);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+
+    const lastCheckout = await Attendance.findOne({
       employee: userId,
-      status: 'active'
-    }).populate('employee', 'name email');
-
-    if (!attendance) {
-      // Check if user has checked out today
-      // Use clockOutTime to determine if checkout was today (more reliable than date field)
-      // Use UTC to ensure consistent date comparison
-      const now = new Date();
-      const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
-      const tomorrow = new Date(today);
-      tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-
-      // Find the most recent checkout where clockOutTime is from today (UTC)
-      const lastCheckout = await Attendance.findOne({
-        employee: userId,
-        status: 'completed',
-        clockOutTime: { 
-          $exists: true,
-          $gte: today,
-          $lt: tomorrow
-        }
-      })
-        .sort({ clockOutTime: -1 })
-        .limit(1);
-
-      if (lastCheckout && lastCheckout.clockOutTime) {
-        const checkoutTime = lastCheckout.clockOutTime;
-        const isManual = lastCheckout.isManualCheckout || false;
-        const nextCheckInTime = isManual ? new Date(checkoutTime.getTime() + (6 * 60 * 60 * 1000)) : null;
-        
-        return res.json({
-          isCheckedIn: false,
-          isCheckedOut: true,
-          checkOutTime: checkoutTime,
-          isManualCheckout: isManual,
-          nextCheckInTime: nextCheckInTime,
-          currentAttendance: null,
-          success: true
-        });
+      status: 'completed',
+      clockOutTime: { 
+        $exists: true,
+        $gte: today,
+        $lt: tomorrow
       }
+    })
+      .sort({ clockOutTime: -1 })
+      .limit(1);
 
+    if (lastCheckout && lastCheckout.clockOutTime) {
+      const checkoutTime = lastCheckout.clockOutTime;
+      const isManual = lastCheckout.isManualCheckout || false;
+      const nextCheckInTime = isManual ? new Date(checkoutTime.getTime() + (6 * 60 * 60 * 1000)) : null;
+      
       return res.json({
         isCheckedIn: false,
-        isCheckedOut: false,
+        isCheckedOut: true,
+        checkOutTime: checkoutTime,
+        isManualCheckout: isManual,
+        nextCheckInTime: nextCheckInTime,
         currentAttendance: null,
         success: true
       });
     }
 
-    res.json({
-      isCheckedIn: true,
+    return res.json({
+      isCheckedIn: false,
       isCheckedOut: false,
-      currentAttendance: {
-        id: attendance._id,
-        checkInTime: attendance.clockInTime,
-        location: attendance.location,
-        elapsedTime: Date.now() - attendance.clockInTime.getTime(),
-        validationStatus: attendance.validationStatus
-      },
+      currentAttendance: null,
       success: true
     });
-  } catch (error) {
-    console.error('Error fetching current attendance:', error);
-    res.status(500).json({ error: 'Failed to fetch current attendance', success: false });
   }
+
+  res.json({
+    isCheckedIn: true,
+    isCheckedOut: false,
+    currentAttendance: {
+      id: attendance._id,
+      checkInTime: attendance.clockInTime,
+      location: attendance.location,
+      elapsedTime: Date.now() - attendance.clockInTime.getTime(),
+      validationStatus: attendance.validationStatus
+    },
+    success: true
+  });
 });
 
 // Enhanced location validation function
@@ -1604,70 +1506,65 @@ const getOrCreateEmployeeForUser = async (userId, userRole, userEmail, userName)
 
 // GET /api/employees/:id/preferences - Get employee location preferences (Admin only)
 router.get('/:id/preferences', requireAuth, requireManager, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
-  try {
-    const employeeId = req.params.id;
+  const employeeId = req.params.id;
 
-    const employee = await Employee.findById(employeeId);
-    if (!employee) {
-      return res.status(404).json({ error: 'Employee not found' });
-    }
-
-    // Initialize locationPreferences if it doesn't exist
-    if (!employee.locationPreferences) {
-      employee.locationPreferences = {
-        selectedGeofences: [],
-        workingHours: [],
-        lastUpdated: new Date()
-      };
-    }
-
-    // Initialize workingHours array if it doesn't exist (for backward compatibility)
-    if (!employee.locationPreferences.workingHours || !Array.isArray(employee.locationPreferences.workingHours)) {
-      employee.locationPreferences.workingHours = [];
-    }
-
-    // Find the default location (isDefault: true) or return null
-    const defaultLocation = employee.locationPreferences.selectedGeofences?.find(
-      loc => loc.isDefault === true
-    ) || null;
-
-    // Find the default working hours (isDefault: true) or return default values
-    const defaultWorkingHours = employee.locationPreferences.workingHours?.find(
-      wh => wh.isDefault === true
-    ) || { startTime: '08:00', endTime: '16:30' };
-
-    res.json({
-      preferences: {
-        selectedGeofenceId: defaultLocation?.geofenceId 
-          ? defaultLocation.geofenceId.toString() 
-          : null,
-        selectedGeofences: employee.locationPreferences.selectedGeofences?.map(loc => ({
-          geofenceId: loc.geofenceId.toString(),
-          isDefault: loc.isDefault,
-          addedAt: loc.addedAt
-        })) || [],
-        workingHours: {
-          startTime: defaultWorkingHours.startTime,
-          endTime: defaultWorkingHours.endTime
-        },
-        workingHoursList: employee.locationPreferences.workingHours?.map(wh => ({
-          startTime: wh.startTime,
-          endTime: wh.endTime,
-          isDefault: wh.isDefault,
-          addedAt: wh.addedAt
-        })) || []
-      },
-      employee: {
-        id: employee._id,
-        name: employee.name,
-        email: employee.email
-      },
-      success: true
-    });
-  } catch (error) {
-    console.error('Error fetching employee location preferences:', error);
-    res.status(500).json({ error: 'Failed to fetch employee location preferences' });
+  const employee = await Employee.findById(employeeId);
+  if (!employee) {
+    return res.status(404).json({ error: 'Employee not found' });
   }
+
+  // Initialize locationPreferences if it doesn't exist
+  if (!employee.locationPreferences) {
+    employee.locationPreferences = {
+      selectedGeofences: [],
+      workingHours: [],
+      lastUpdated: new Date()
+    };
+  }
+
+  // Initialize workingHours array if it doesn't exist (for backward compatibility)
+  if (!employee.locationPreferences.workingHours || !Array.isArray(employee.locationPreferences.workingHours)) {
+    employee.locationPreferences.workingHours = [];
+  }
+
+  // Find the default location (isDefault: true) or return null
+  const defaultLocation = employee.locationPreferences.selectedGeofences?.find(
+    loc => loc.isDefault === true
+  ) || null;
+
+  // Find the default working hours (isDefault: true) or return default values
+  const defaultWorkingHours = employee.locationPreferences.workingHours?.find(
+    wh => wh.isDefault === true
+  ) || { startTime: '08:00', endTime: '16:30' };
+
+  res.json({
+    preferences: {
+      selectedGeofenceId: defaultLocation?.geofenceId 
+        ? defaultLocation.geofenceId.toString() 
+        : null,
+      selectedGeofences: employee.locationPreferences.selectedGeofences?.map(loc => ({
+        geofenceId: loc.geofenceId.toString(),
+        isDefault: loc.isDefault,
+        addedAt: loc.addedAt
+      })) || [],
+      workingHours: {
+        startTime: defaultWorkingHours.startTime,
+        endTime: defaultWorkingHours.endTime
+      },
+      workingHoursList: employee.locationPreferences.workingHours?.map(wh => ({
+        startTime: wh.startTime,
+        endTime: wh.endTime,
+        isDefault: wh.isDefault,
+        addedAt: wh.addedAt
+      })) || []
+    },
+    employee: {
+      id: employee._id,
+      name: employee.name,
+      email: employee.email
+    },
+    success: true
+  });
 });
 
 // PUT /api/employees/:id/preferences - Update employee location preferences (Admin only)
@@ -1825,13 +1722,10 @@ router.put('/:id/preferences', requireAuth, requireManager, validate(idParamsSch
       message: 'Employee location preferences updated successfully'
     });
   } catch (error) {
-    console.error('Error updating employee location preferences:', error);
-    
     if (error.name === 'ValidationError') {
       return res.status(400).json({ error: error.message });
     }
-
-    res.status(500).json({ error: 'Failed to update employee location preferences' });
+    throw error;
   }
 });
 

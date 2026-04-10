@@ -62,9 +62,8 @@ const taskTransferSchema = z.object({
 
 // GET /api/tasks - Get all tasks (filtered by user role)
 router.get('/', requireAuth, async (req, res) => {
-  try {
-    const { status, priority, assignedTo, page = 1, limit = 50 } = req.query;
-    const query = {};
+  const { status, priority, assignedTo, page = 1, limit = 50 } = req.query;
+  const query = {};
 
     // If user is not admin, only show tasks assigned to their employee record
     if (req.user.role !== 'admin') {
@@ -99,24 +98,19 @@ router.get('/', requireAuth, async (req, res) => {
       .skip((page - 1) * limit)
       .select('-__v');
 
-    const total = await Task.countDocuments(query);
+  const total = await Task.countDocuments(query);
 
-    res.json({
-      tasks,
-      total,
-      page: parseInt(page),
-      totalPages: Math.ceil(total / limit)
-    });
-  } catch (error) {
-    console.error('Error fetching tasks:', error);
-    res.status(500).json({ error: 'Failed to fetch tasks' });
-  }
+  res.json({
+    tasks,
+    total,
+    page: parseInt(page),
+    totalPages: Math.ceil(total / limit)
+  });
 });
 
 // GET /api/tasks/:id - Get single task
 router.get('/:id', requireAuth, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
-  try {
-    const task = await Task.findById(req.params.id)
+  const task = await Task.findById(req.params.id)
       .populate('assignedTo', 'name email role department user')
       .populate('assignedBy', 'name email')
       .populate('location', 'name address')
@@ -161,11 +155,7 @@ router.get('/:id', requireAuth, validate(idParamsSchema, { source: 'params' }), 
       await task.populate('assignmentHistory.assignedBy', 'name email');
     }
 
-    res.json({ task });
-  } catch (error) {
-    console.error('Error fetching task:', error);
-    res.status(500).json({ error: 'Failed to fetch task' });
-  }
+  res.json({ task });
 });
 
 // POST /api/tasks - Create new task (admin only)
@@ -273,7 +263,6 @@ router.post('/', requireAuth, validate(taskCreateSchema), async (req, res) => {
         // This saves the notification to database (in-app) and sends push notification if token is available
         await Notification.createAndSend(notificationData);
       } catch (notifError) {
-        console.error('Error sending task assignment notification:', notifError);
         // Don't fail task creation if notification fails
       }
     }
@@ -283,11 +272,10 @@ router.post('/', requireAuth, validate(taskCreateSchema), async (req, res) => {
       message: 'Task created and assigned successfully'
     });
   } catch (error) {
-    console.error('Error creating task:', error);
     if (error.name === 'ValidationError') {
       return res.status(400).json({ error: error.message });
     }
-    res.status(500).json({ error: 'Failed to create task' });
+    throw error;
   }
 });
 
@@ -399,7 +387,7 @@ router.put('/:id', requireAuth, validate(idParamsSchema, { source: 'params' }), 
           
           await Notification.createAndSend(notificationData);
         } catch (notifError) {
-          console.error('Error sending task transfer notification:', notifError);
+          // Don't fail task update if notification fails
         }
       }
     }
@@ -507,7 +495,6 @@ router.put('/:id', requireAuth, validate(idParamsSchema, { source: 'params' }), 
           }
         }
       } catch (notifError) {
-        console.error('Error sending task completion notification:', notifError);
         // Don't fail task update if notification fails
       }
     }
@@ -517,11 +504,10 @@ router.put('/:id', requireAuth, validate(idParamsSchema, { source: 'params' }), 
       message: 'Task updated successfully'
     });
   } catch (error) {
-    console.error('Error updating task:', error);
     if (error.name === 'ValidationError') {
       return res.status(400).json({ error: error.message });
     }
-    res.status(500).json({ error: 'Failed to update task' });
+    throw error;
   }
 });
 
@@ -662,7 +648,7 @@ router.post('/:id/transfer', requireAuth, validate(idParamsSchema, { source: 'pa
         
         await Notification.createAndSend(notificationData);
       } catch (notifError) {
-        console.error('Error sending task transfer notification:', notifError);
+        // Don't fail task transfer if notification fails
       }
     }
 
@@ -671,11 +657,10 @@ router.post('/:id/transfer', requireAuth, validate(idParamsSchema, { source: 'pa
       message: 'Task transferred successfully'
     });
   } catch (error) {
-    console.error('Error transferring task:', error);
     if (error.name === 'ValidationError') {
       return res.status(400).json({ error: error.message });
     }
-    res.status(500).json({ error: 'Failed to transfer task' });
+    throw error;
   }
 });
 

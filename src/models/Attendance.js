@@ -40,6 +40,10 @@ const attendanceSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  isAutoCheckout: {
+    type: Boolean,
+    default: false
+  },
   location: {
     latitude: Number,
     longitude: Number,

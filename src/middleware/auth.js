@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const logger = require('../config/logger');
 
 const authenticateToken = (req, res, next) => {
   const header = req.headers.authorization;
@@ -12,14 +13,8 @@ const authenticateToken = (req, res, next) => {
     req.user = decoded;
     return next();
   } catch (err) {
-    // Log the actual error for debugging (but don't expose sensitive details to client)
-    console.error('JWT verification failed:', {
-      name: err.name,
-      message: err.message,
-      path: req.path,
-      // Only log in development
-      ...(process.env.NODE_ENV !== 'production' && { fullError: err.toString() })
-    });
+    const log = req.log || logger;
+    log.warn({ errName: err.name, path: req.path }, 'JWT verification failed');
     return res.status(401).json({ message: 'Invalid token' });
   }
 };

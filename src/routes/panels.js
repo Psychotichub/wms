@@ -19,18 +19,14 @@ const panelUpdateSchema = z.object({
   circuit: z.string().min(1).optional()
 });
 
-router.get('/', authenticateToken, requireActiveSite, async (req, res, next) => {
-  try {
-    // Allow all users to see panels for their company/site
-    const query = { company: req.user.company, site: req.user.site };
-    const panels = await Panel.find(query).sort({ createdAt: -1 });
-    return res.json({ panels });
-  } catch (err) {
-    return next(err);
-  }
+router.get('/', authenticateToken, requireActiveSite, async (req, res) => {
+  // Allow all users to see panels for their company/site
+  const query = { company: req.user.company, site: req.user.site };
+  const panels = await Panel.find(query).sort({ createdAt: -1 });
+  return res.json({ panels });
 });
 
-router.post('/', authenticateToken, requireActiveSite, validate(panelCreateSchema), async (req, res, next) => {
+router.post('/', authenticateToken, requireActiveSite, validate(panelCreateSchema), async (req, res) => {
   try {
     const { name, circuit } = req.data;
     const existing = await Panel.findOne({
@@ -54,10 +50,7 @@ router.post('/', authenticateToken, requireActiveSite, validate(panelCreateSchem
     if (err.code === 11000) {
       return res.status(400).json({ message: 'Panel + circuit already exists' });
     }
-    if (err.code === 11000) {
-      return res.status(400).json({ message: 'Panel + circuit already exists' });
-    }
-    return next(err);
+    throw err;
   }
 });
 
@@ -67,7 +60,7 @@ router.put(
   requireActiveSite,
   validate(idParamsSchema, { source: 'params' }),
   validate(panelUpdateSchema),
-  async (req, res, next) => {
+  async (req, res) => {
   try {
     const { name, circuit } = req.data;
     const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
@@ -99,23 +92,18 @@ router.put(
     if (err.code === 11000) {
       return res.status(400).json({ message: 'Panel + circuit already exists' });
     }
-    return next(err);
+    throw err;
   }
 });
 
-router.delete('/:id', authenticateToken, requireActiveSite, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
-  try {
-    const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
-    const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
-    const deleted = await Panel.findOneAndDelete(filter);
-    if (!deleted) {
-      return res.status(404).json({ message: 'Panel not found' });
-    }
-    return res.json({ success: true });
-  } catch (err) {
-    return next(err);
+router.delete('/:id', authenticateToken, requireActiveSite, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
+  const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
+  const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
+  const deleted = await Panel.findOneAndDelete(filter);
+  if (!deleted) {
+    return res.status(404).json({ message: 'Panel not found' });
   }
+  return res.json({ success: true });
 });
 
 module.exports = router;
-

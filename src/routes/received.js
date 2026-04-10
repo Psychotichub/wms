@@ -60,55 +60,47 @@ const notifyLowStockIfNeeded = async ({ material, prevQuantity, triggeredBy }) =
 };
 
 // Get all received records for the company/site
-router.get('/', authenticateToken, requireActiveSite, async (req, res, next) => {
-  try {
-    const query = { company: req.user.company, site: req.user.site };
-    const records = await Received.find(query).sort({ date: -1 });
-    return res.json({ records });
-  } catch (err) {
-    return next(err);
-  }
+router.get('/', authenticateToken, requireActiveSite, async (req, res) => {
+  const query = { company: req.user.company, site: req.user.site };
+  const records = await Received.find(query).sort({ date: -1 });
+  return res.json({ records });
 });
 
 // Create a new received record
-router.post('/', authenticateToken, requireActiveSite, validate(receivedCreateSchema), async (req, res, next) => {
-  try {
-    const { materialName, quantity, notes, date } = req.data;
+router.post('/', authenticateToken, requireActiveSite, validate(receivedCreateSchema), async (req, res) => {
+  const { materialName, quantity, notes, date } = req.data;
 
-    // Validate material exists
-    const material = await Material.findOne({
-      name: materialName,
-      company: req.user.company,
-      site: req.user.site
-    });
-    if (!material) {
-      return res.status(400).json({ message: 'Material not found in database. Create it in Add Material first.' });
-    }
-
-    const record = await Received.create({
-      materialName,
-      quantity,
-      notes,
-      date: date || new Date(),
-      company: req.user.company,
-      site: req.user.site,
-      createdBy: req.user.id
-    });
-
-    // Update material quantity
-    const prevQuantity = material.quantity || 0;
-    material.quantity = prevQuantity + Number(quantity);
-    await material.save();
-    await notifyLowStockIfNeeded({
-      material,
-      prevQuantity,
-      triggeredBy: req.user.id
-    });
-
-    return res.status(201).json({ record });
-  } catch (err) {
-    return next(err);
+  // Validate material exists
+  const material = await Material.findOne({
+    name: materialName,
+    company: req.user.company,
+    site: req.user.site
+  });
+  if (!material) {
+    return res.status(400).json({ message: 'Material not found in database. Create it in Add Material first.' });
   }
+
+  const record = await Received.create({
+    materialName,
+    quantity,
+    notes,
+    date: date || new Date(),
+    company: req.user.company,
+    site: req.user.site,
+    createdBy: req.user.id
+  });
+
+  // Update material quantity
+  const prevQuantity = material.quantity || 0;
+  material.quantity = prevQuantity + Number(quantity);
+  await material.save();
+  await notifyLowStockIfNeeded({
+    material,
+    prevQuantity,
+    triggeredBy: req.user.id
+  });
+
+  return res.status(201).json({ record });
 });
 
 // Update a record
@@ -118,64 +110,24 @@ router.put(
   requireActiveSite,
   validate(idParamsSchema, { source: 'params' }),
   validate(receivedUpdateSchema),
-  async (req, res, next) => {
-  try {
-    const { materialName, quantity, notes, date } = req.data;
-    const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
-    const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
+  async (req, res) => {
+  const { materialName, quantity, notes, date } = req.data;
+  const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
+  const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
 
-    const oldRecord = await Received.findOne(filter);
-    if (!oldRecord) return res.status(404).json({ message: 'Record not found' });
+  const oldRecord = await Received.findOne(filter);
+  if (!oldRecord) return res.status(404).json({ message: 'Record not found' });
 
-    // Handle quantity change in Material
-    if (quantity !== undefined) {
-      const material = await Material.findOne({
-        name: oldRecord.materialName,
-        company: req.user.company,
-        site: req.user.site
-      });
-      if (material) {
-        const prevQuantity = material.quantity || 0;
-        material.quantity = prevQuantity - oldRecord.quantity + Number(quantity);
-        await material.save();
-        await notifyLowStockIfNeeded({
-          material,
-          prevQuantity,
-          triggeredBy: req.user.id
-        });
-      }
-    }
-
-    const updated = await Received.findOneAndUpdate(
-      filter,
-      { materialName, quantity, notes, date },
-      { new: true }
-    );
-
-    return res.json({ record: updated });
-  } catch (err) {
-    return next(err);
-  }
-});
-
-// Delete a record
-router.delete('/:id', authenticateToken, requireActiveSite, validate(idParamsSchema, { source: 'params' }), async (req, res, next) => {
-  try {
-    const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
-    const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
-
-    const record = await Received.findOne(filter);
-    if (!record) return res.status(404).json({ message: 'Record not found' });
-
-    // Revert quantity in Material
+  // Handle quantity change in Material
+  if (quantity !== undefined) {
     const material = await Material.findOne({
-      name: record.materialName,
+      name: oldRecord.materialName,
       company: req.user.company,
       site: req.user.site
     });
     if (material) {
       const prevQuantity = material.quantity || 0;
-      material.quantity = prevQuantity - record.quantity;
+      material.quantity = prevQuantity - oldRecord.quantity + Number(quantity);
       await material.save();
       await notifyLowStockIfNeeded({
         material,
@@ -183,13 +135,44 @@ router.delete('/:id', authenticateToken, requireActiveSite, validate(idParamsSch
         triggeredBy: req.user.id
       });
     }
-
-    await Received.deleteOne({ _id: record._id });
-    return res.json({ success: true });
-  } catch (err) {
-    return next(err);
   }
+
+  const updated = await Received.findOneAndUpdate(
+    filter,
+    { materialName, quantity, notes, date },
+    { new: true }
+  );
+
+  return res.json({ record: updated });
+});
+
+// Delete a record
+router.delete('/:id', authenticateToken, requireActiveSite, validate(idParamsSchema, { source: 'params' }), async (req, res) => {
+  const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
+  const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
+
+  const record = await Received.findOne(filter);
+  if (!record) return res.status(404).json({ message: 'Record not found' });
+
+  // Revert quantity in Material
+  const material = await Material.findOne({
+    name: record.materialName,
+    company: req.user.company,
+    site: req.user.site
+  });
+  if (material) {
+    const prevQuantity = material.quantity || 0;
+    material.quantity = prevQuantity - record.quantity;
+    await material.save();
+    await notifyLowStockIfNeeded({
+      material,
+      prevQuantity,
+      triggeredBy: req.user.id
+    });
+  }
+
+  await Received.deleteOne({ _id: record._id });
+  return res.json({ success: true });
 });
 
 module.exports = router;
-
