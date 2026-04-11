@@ -11,12 +11,14 @@ const idParamsSchema = z.object({
 
 const panelCreateSchema = z.object({
   name: z.string().min(1),
-  circuit: z.string().min(1)
+  circuit: z.string().min(1),
+  cableSize: z.string().optional()
 });
 
 const panelUpdateSchema = z.object({
   name: z.string().min(1).optional(),
-  circuit: z.string().min(1).optional()
+  circuit: z.string().min(1).optional(),
+  cableSize: z.string().optional()
 });
 
 router.get('/', authenticateToken, requireActiveSite, async (req, res) => {
@@ -28,7 +30,7 @@ router.get('/', authenticateToken, requireActiveSite, async (req, res) => {
 
 router.post('/', authenticateToken, requireActiveSite, validate(panelCreateSchema), async (req, res) => {
   try {
-    const { name, circuit } = req.data;
+    const { name, circuit, cableSize } = req.data;
     const existing = await Panel.findOne({
       name,
       circuit,
@@ -41,6 +43,7 @@ router.post('/', authenticateToken, requireActiveSite, validate(panelCreateSchem
     const panel = await Panel.create({
       name,
       circuit,
+      cableSize: cableSize || '',
       company: req.user.company,
       site: req.user.site,
       createdBy: req.user.id
@@ -62,7 +65,7 @@ router.put(
   validate(panelUpdateSchema),
   async (req, res) => {
   try {
-    const { name, circuit } = req.data;
+    const { name, circuit, cableSize } = req.data;
     const baseFilter = { _id: req.params.id, company: req.user.company, site: req.user.site };
     const filter = req.user.role === 'admin' ? baseFilter : { ...baseFilter, createdBy: req.user.id };
     const current = await Panel.findOne(filter);
@@ -72,6 +75,7 @@ router.put(
 
     const nextName = name !== undefined ? name : current.name;
     const nextCircuit = circuit !== undefined ? circuit : current.circuit;
+    if (cableSize !== undefined) current.cableSize = cableSize;
 
     const existing = await Panel.findOne({
       name: nextName,

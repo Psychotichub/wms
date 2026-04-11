@@ -4,6 +4,7 @@ const PanelSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     circuit: { type: String, required: true },
+    cableSize: { type: String, default: '' },
     company: { type: String, required: true },
     site: { type: String, required: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
