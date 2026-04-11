@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const helmet = require('helmet');
 const compression = require('compression');
-const rateLimit = require('express-rate-limit');
+// const rateLimit = require('express-rate-limit');
 const mongoose = require('mongoose');
 const Sentry = require('@sentry/node');
 const pinoHttp = require('pino-http');
@@ -157,48 +157,47 @@ app.use(
   })
 );
 
-// ── Rate limiting ───────────────────────────────────────────────────────────
+// ── Rate limiting (commented out for now) ────────────────────────────────────
 
-const rateLimitWindowMs =
-  Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000;
-const rateLimitMax =
-  Number(process.env.RATE_LIMIT_MAX) ||
-  (isProdEnv ? 100 : 10000);
-const rateLimitEnabled =
-  (process.env.RATE_LIMIT_ENABLED || (isProdEnv ? 'true' : 'false')).toLowerCase() === 'true';
-
-const generalLimiter = rateLimit({
-  windowMs: rateLimitWindowMs,
-  max: rateLimitMax,
-  message: 'Too many requests from this IP, please try again later',
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip(req) {
-    return req.path.startsWith('/api/auth/');
-  },
-});
-
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: isProdEnv ? 15 : 10000,
-  message: 'Too many authentication attempts, please try again later',
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-if (rateLimitEnabled) {
-  app.use(generalLimiter);
-  logger.info('General rate limiter enabled');
-}
-
-// Telemetry receives anonymous traffic — always limit it tightly.
-const telemetryLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 10,
-  message: 'Too many telemetry reports',
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+// const rateLimitWindowMs =
+//   Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000;
+// const rateLimitMax =
+//   Number(process.env.RATE_LIMIT_MAX) ||
+//   (isProdEnv ? 100 : 10000);
+// const rateLimitEnabled =
+//   (process.env.RATE_LIMIT_ENABLED || (isProdEnv ? 'true' : 'false')).toLowerCase() === 'true';
+//
+// const generalLimiter = rateLimit({
+//   windowMs: rateLimitWindowMs,
+//   max: rateLimitMax,
+//   message: 'Too many requests from this IP, please try again later',
+//   standardHeaders: true,
+//   legacyHeaders: false,
+//   skip(req) {
+//     return req.path.startsWith('/api/auth/');
+//   },
+// });
+//
+// const authLimiter = rateLimit({
+//   windowMs: 15 * 60 * 1000,
+//   max: isProdEnv ? 15 : 10000,
+//   message: 'Too many authentication attempts, please try again later',
+//   standardHeaders: true,
+//   legacyHeaders: false,
+// });
+//
+// if (rateLimitEnabled) {
+//   app.use(generalLimiter);
+//   logger.info('General rate limiter enabled');
+// }
+//
+// const telemetryLimiter = rateLimit({
+//   windowMs: 60 * 1000,
+//   max: 10,
+//   message: 'Too many telemetry reports',
+//   standardHeaders: true,
+//   legacyHeaders: false,
+// });
 
 app.use(express.json({ limit: '1mb' }));
 
@@ -250,7 +249,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // ── Routes ──────────────────────────────────────────────────────────────────
 
-app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/materials', materialRoutes);
 app.use('/api/received', receivedRoutes);
@@ -262,7 +261,7 @@ app.use('/api/employees', employeeRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/devices', deviceRoutes);
-app.use('/api/telemetry', telemetryLimiter, express.json({ limit: '4kb' }), telemetryRoutes);
+app.use('/api/telemetry', telemetryRoutes);
 app.use('/api/contracts', contractRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/tasks', taskRoutes);
