@@ -6,6 +6,7 @@ const DailyReportSchema = new mongoose.Schema(
     summary: { type: String, required: true },
     tasks: [{ type: String }],
     status: { type: String, enum: ['pending', 'in-progress', 'done'], default: 'pending' },
+    materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' },
     materialName: { type: String },
     quantity: { type: Number, default: 0 },
     location: { type: String },
@@ -22,6 +23,7 @@ const DailyReportSchema = new mongoose.Schema(
 // Query optimization for date- and scope-based lookups
 DailyReportSchema.index({ company: 1, site: 1, date: -1 });
 DailyReportSchema.index({ date: -1 });
+DailyReportSchema.index({ company: 1, site: 1, materialId: 1 });
 
 module.exports = mongoose.model('DailyReport', DailyReportSchema);
 

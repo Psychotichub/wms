@@ -1,5 +1,6 @@
 const express = require('express');
 const Panel = require('../models/Panel');
+const { syncPanelDenormAfterUpdate } = require('../utils/referenceSync');
 const { authenticateToken, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
 
@@ -73,6 +74,8 @@ router.put(
       return res.status(404).json({ message: 'Panel not found' });
     }
 
+    const prevName = current.name;
+    const prevCircuit = current.circuit;
     const nextName = name !== undefined ? name : current.name;
     const nextCircuit = circuit !== undefined ? circuit : current.circuit;
     if (cableSize !== undefined) current.cableSize = cableSize;
@@ -91,6 +94,21 @@ router.put(
     current.name = nextName;
     current.circuit = nextCircuit;
     await current.save();
+
+    const panelOrCircuitChanged = prevName !== nextName || prevCircuit !== nextCircuit;
+    const cableChanged = cableSize !== undefined;
+    if (panelOrCircuitChanged || cableChanged) {
+      await syncPanelDenormAfterUpdate({
+        company: req.user.company,
+        site: req.user.site,
+        oldName: prevName,
+        oldCircuit: prevCircuit,
+        newName: nextName,
+        newCircuit: nextCircuit,
+        newCableSize: cableChanged ? current.cableSize : undefined
+      });
+    }
+
     return res.json({ panel: current });
   } catch (err) {
     if (err.code === 11000) {

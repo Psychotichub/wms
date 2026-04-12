@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "test": "jest --forceExit --detectOpenHandles",
     "test:watch": "jest --watch --forceExit --detectOpenHandles",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "seed": "node scripts/seed.js"
   },
   "dependencies": {
     "@sentry/node": "^10.48.0",

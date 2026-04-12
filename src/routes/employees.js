@@ -108,9 +108,14 @@ router.get('/', requireAuth, async (req, res) => {
     department,
     isActive = 'true',
     search,
-    page = 1,
-    limit = 20
+    page: rawPage = 1,
+    limit: rawLimit = 20
   } = req.query;
+
+  let page = Math.max(1, parseInt(String(rawPage), 10) || 1);
+  let limit = parseInt(String(rawLimit), 10);
+  if (!Number.isFinite(limit) || limit < 1) limit = 20;
+  limit = Math.min(200, limit);
 
     const query = {};
 
@@ -140,7 +145,7 @@ router.get('/', requireAuth, async (req, res) => {
     const employees = await Employee.find(query)
       .populate('manager', 'name email')
       .sort({ name: 1 })
-      .limit(limit * 1)
+      .limit(limit)
       .skip((page - 1) * limit)
       .select('-__v');
 
@@ -149,10 +154,10 @@ router.get('/', requireAuth, async (req, res) => {
   res.json({
     employees,
     pagination: {
-      page: parseInt(page),
-      limit: parseInt(limit),
+      page,
+      limit,
       total,
-      pages: Math.ceil(total / limit)
+      pages: Math.ceil(total / limit) || 0
     }
   });
 });

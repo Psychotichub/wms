@@ -122,7 +122,12 @@ const statsQuerySchema = z.object({
 
 // GET /api/notifications - Get user notifications
 router.get('/', requireAuth, validate(notificationsQuerySchema, { source: 'query' }), async (req, res) => {
-  const { status, type, limit = 20, page = 1, includeExpired = false } = req.data;
+  const { status, type, limit: rawLimit = 20, page: rawPage = 1, includeExpired = false } = req.data;
+  let limit = parseInt(String(rawLimit), 10);
+  if (!Number.isFinite(limit) || limit < 1) limit = 20;
+  limit = Math.min(100, limit);
+  let page = parseInt(String(rawPage), 10);
+  if (!Number.isFinite(page) || page < 1) page = 1;
   const userId = req.user?.id;
   const userRole = req.user?.role;
   const userEmail = req.user?.email;

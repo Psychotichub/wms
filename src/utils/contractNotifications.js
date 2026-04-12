@@ -48,12 +48,16 @@ async function checkAndNotifyExceededContracts() {
         totalChecked++;
 
         // Calculate total consumption from daily reports
+        const mid = contract.materialId?._id || contract.materialId;
         const consumptionResult = await DailyReport.aggregate([
           {
             $match: {
               company,
               site,
-              materialName: contract.materialName
+              $or: [
+                ...(mid ? [{ materialId: mid }] : []),
+                { materialName: contract.materialName }
+              ]
             }
           },
           {

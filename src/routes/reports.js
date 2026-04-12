@@ -4,6 +4,10 @@ const Panel = require('../models/Panel');
 const Material = require('../models/Material');
 const { authenticateToken, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
+const { parsePageLimit } = require('../utils/pagination');
+const { idempotencyGet, idempotencySet } = require('../utils/idempotency');
+
+const IDEMPOTENCY_REPORTS_DAILY_POST = 'POST /api/reports/daily';
 
 const router = express.Router();
 
@@ -42,11 +46,23 @@ router.get('/daily', authenticateToken, requireActiveSite, async (req, res) => {
     req.user.role === 'admin'
       ? { company: req.user.company, site: req.user.site }
       : { createdBy: req.user.id, company: req.user.company, site: req.user.site };
-  const reports = await DailyReport.find(query).sort({ date: -1 });
-  return res.json({ reports });
+  const { page, limit, skip } = parsePageLimit(req.query, { defaultLimit: 100, maxLimit: 500 });
+  const [reports, total] = await Promise.all([
+    DailyReport.find(query).sort({ date: -1 }).skip(skip).limit(limit).lean(),
+    DailyReport.countDocuments(query)
+  ]);
+  return res.json({
+    reports,
+    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 0 }
+  });
 });
 
 router.post('/daily', authenticateToken, requireActiveSite, validate(dailyCreateSchema), async (req, res) => {
+  const cached = await idempotencyGet(req, IDEMPOTENCY_REPORTS_DAILY_POST);
+  if (cached) {
+    return res.status(cached.statusCode).json(cached.body);
+  }
+
   const { date, summary, tasks, status, materialId, quantity, location, panel, circuit, notes } = req.data;
 
   const material = await Material.findOne({ _id: materialId, company: req.user.company, site: req.user.site });
@@ -82,7 +98,9 @@ router.post('/daily', authenticateToken, requireActiveSite, validate(dailyCreate
     site: req.user.site,
     createdBy: req.user.id
   });
-  return res.status(201).json({ report });
+  const body = { report };
+  await idempotencySet(req, IDEMPOTENCY_REPORTS_DAILY_POST, 201, body);
+  return res.status(201).json(body);
 });
 
 router.put(

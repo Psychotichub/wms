@@ -62,7 +62,11 @@ const taskTransferSchema = z.object({
 
 // GET /api/tasks - Get all tasks (filtered by user role)
 router.get('/', requireAuth, async (req, res) => {
-  const { status, priority, assignedTo, page = 1, limit = 50 } = req.query;
+  const { status, priority, assignedTo } = req.query;
+  const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
+  let limit = parseInt(String(req.query.limit ?? '50'), 10);
+  if (!Number.isFinite(limit) || limit < 1) limit = 50;
+  limit = Math.min(100, limit);
   const query = {};
 
     // If user is not admin, only show tasks assigned to their employee record

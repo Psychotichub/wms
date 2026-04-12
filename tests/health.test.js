@@ -16,6 +16,7 @@ app.get('/health', (_req, res) => {
     service: 'wms-backend',
     uptime: Math.floor(process.uptime()),
     mongo: stateMap[mongoState] || 'unknown',
+    redis: { configured: false, status: 'not_used' },
     memory: {
       rss: Math.round(mem.rss / 1024 / 1024),
       heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
@@ -33,5 +34,6 @@ describe('GET /health', () => {
     expect(res.body.mongo).toBe('connected');
     expect(res.body.memory).toBeDefined();
     expect(typeof res.body.uptime).toBe('number');
+    expect(res.body.redis).toEqual({ configured: false, status: 'not_used' });
   });
 });

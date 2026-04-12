@@ -42,12 +42,16 @@ router.get('/', authenticateToken, requireActiveSite, async (req, res, next) => 
     const contractsWithConsumption = await Promise.all(
       contracts.map(async (contract) => {
         // Sum all quantities from daily reports for this material
+        const mid = contract.materialId?._id || contract.materialId;
         const consumptionResult = await DailyReport.aggregate([
           {
             $match: {
               company: req.user.company,
               site: req.user.site,
-              materialName: contract.materialName
+              $or: [
+                ...(mid ? [{ materialId: mid }] : []),
+                { materialName: contract.materialName }
+              ]
             }
           },
           {

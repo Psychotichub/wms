@@ -6,6 +6,7 @@ const Notification = require('../models/Notification');
 const NotificationPreferences = require('../models/NotificationPreferences');
 const { authenticateToken, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
+const { parsePageLimit } = require('../utils/pagination');
 
 const requireAuth = [authenticateToken, requireActiveSite];
 
@@ -80,21 +81,26 @@ router.get('/', requireAuth, async (req, res) => {
     query.category = category;
   }
 
-  let todos = await Todo.find(query)
-    .sort({ createdAt: -1 })
-    .lean();
-
-  // Apply search filter if provided
-  if (search) {
-    const searchLower = search.toLowerCase();
-    todos = todos.filter(todo =>
-      todo.title.toLowerCase().includes(searchLower) ||
-      todo.description?.toLowerCase().includes(searchLower) ||
-      todo.tags?.some(tag => tag.toLowerCase().includes(searchLower))
-    );
+  if (search && String(search).trim()) {
+    const term = String(search).trim();
+    const rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    query.$or = [
+      { title: rx },
+      { description: rx },
+      { tags: rx }
+    ];
   }
 
-  res.json({ todos });
+  const { page, limit, skip } = parsePageLimit(req.query, { defaultLimit: 200, maxLimit: 500 });
+  const [todos, total] = await Promise.all([
+    Todo.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+    Todo.countDocuments(query)
+  ]);
+
+  res.json({
+    todos,
+    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 0 }
+  });
 });
 
 // GET /api/todos/:id - Get single todo

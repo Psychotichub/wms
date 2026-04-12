@@ -346,6 +346,9 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
     if (!user) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
+    if (user.isDeleted) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
     const valid = await user.comparePassword(password);
     if (!valid) {
       return res.status(401).json({ message: 'Invalid credentials' });
@@ -420,6 +423,9 @@ router.post('/refresh', validate(refreshSchema), async (req, res, next) => {
 
     const user = await User.findById(decoded.id);
     if (!user) {
+      return res.status(401).json({ message: 'Invalid refresh token' });
+    }
+    if (user.isDeleted) {
       return res.status(401).json({ message: 'Invalid refresh token' });
     }
 

@@ -39,7 +39,9 @@ const UserSchema = new mongoose.Schema(
     emailVerificationCode: { type: String, default: null },
     emailVerificationCodeExpiry: { type: Date, default: null },
     // Track if user was created by admin (to prevent cleanup from deleting them)
-    createdByAdmin: { type: Boolean, default: false }
+    createdByAdmin: { type: Boolean, default: false },
+    isDeleted: { type: Boolean, default: false },
+    deletedAt: { type: Date, default: null }
   },
   { timestamps: true }
 );

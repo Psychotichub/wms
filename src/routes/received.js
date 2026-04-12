@@ -5,6 +5,9 @@ const User = require('../models/User');
 const NotificationPreferences = require('../models/NotificationPreferences');
 const { authenticateToken, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
+const { idempotencyGet, idempotencySet } = require('../utils/idempotency');
+
+const IDEMPOTENCY_RECEIVED_POST = 'POST /api/received';
 
 const router = express.Router();
 
@@ -68,6 +71,11 @@ router.get('/', authenticateToken, requireActiveSite, async (req, res) => {
 
 // Create a new received record
 router.post('/', authenticateToken, requireActiveSite, validate(receivedCreateSchema), async (req, res) => {
+  const cached = await idempotencyGet(req, IDEMPOTENCY_RECEIVED_POST);
+  if (cached) {
+    return res.status(cached.statusCode).json(cached.body);
+  }
+
   const { materialName, quantity, notes, date } = req.data;
 
   // Validate material exists
@@ -100,7 +108,9 @@ router.post('/', authenticateToken, requireActiveSite, validate(receivedCreateSc
     triggeredBy: req.user.id
   });
 
-  return res.status(201).json({ record });
+  const body = { record };
+  await idempotencySet(req, IDEMPOTENCY_RECEIVED_POST, 201, body);
+  return res.status(201).json(body);
 });
 
 // Update a record

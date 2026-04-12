@@ -80,6 +80,11 @@ try {
   throw error;
 }
 const { initializeScheduledJobs } = require('./utils/scheduler');
+const { auditLogMiddleware } = require('./middleware/auditLog');
+const searchRoutes = require('./routes/search');
+const auditRoutes = require('./routes/audit');
+const exportRoutes = require('./routes/export');
+const privacyRoutes = require('./routes/privacy');
 
 const app = express();
 const port = process.env.PORT || 4000;
@@ -152,7 +157,7 @@ app.use(
       return callback(new Error(`CORS blocked origin: ${origin}`));
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
     exposedHeaders: ['Content-Length'],
   })
 );
@@ -200,6 +205,7 @@ app.use(
 // });
 
 app.use(express.json({ limit: '1mb' }));
+app.use(auditLogMiddleware);
 
 // ── Health check ────────────────────────────────────────────────────────────
 
@@ -209,11 +215,15 @@ app.get('/health', (_req, res) => {
   const mem = process.memoryUsage();
 
   const healthy = mongoState === 1;
+  const redisUrl = (process.env.REDIS_URL || '').trim();
   res.status(healthy ? 200 : 503).json({
     status: healthy ? 'ok' : 'degraded',
     service: 'wms-backend',
     uptime: Math.floor(process.uptime()),
     mongo: stateMap[mongoState] || 'unknown',
+    redis: redisUrl
+      ? { configured: true, status: 'not_checked' }
+      : { configured: false, status: 'not_used' },
     memory: {
       rss: Math.round(mem.rss / 1024 / 1024),
       heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
@@ -250,6 +260,10 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 // ── Routes ──────────────────────────────────────────────────────────────────
 
 app.use('/api/auth', authRoutes);
+app.use('/api/search', searchRoutes);
+app.use('/api/audit', auditRoutes);
+app.use('/api/export', exportRoutes);
+app.use('/api/privacy', privacyRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/materials', materialRoutes);
 app.use('/api/received', receivedRoutes);

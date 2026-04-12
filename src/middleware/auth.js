@@ -1,7 +1,8 @@
 const jwt = require('jsonwebtoken');
 const logger = require('../config/logger');
+const User = require('../models/User');
 
-const authenticateToken = (req, res, next) => {
+const authenticateToken = async (req, res, next) => {
   const header = req.headers.authorization;
   if (!header) {
     return res.status(401).json({ message: 'No token provided' });
@@ -10,6 +11,10 @@ const authenticateToken = (req, res, next) => {
   const token = header.replace('Bearer ', '');
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const account = await User.findById(decoded.id).select('isDeleted');
+    if (!account || account.isDeleted) {
+      return res.status(401).json({ message: 'Account deactivated' });
+    }
     req.user = decoded;
     return next();
   } catch (err) {

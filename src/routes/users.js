@@ -39,7 +39,11 @@ const passwordUpdateSchema = z.object({
 
 router.get('/', authenticateToken, requireActiveSite, requireAdmin, async (req, res, next) => {
   try {
-    const users = await User.find({ company: req.user.company, site: req.user.site }).select('-password');
+    const users = await User.find({
+      company: req.user.company,
+      site: req.user.site,
+      isDeleted: { $ne: true }
+    }).select('-password');
     return res.json({ users });
   } catch (err) {
     return next(err);

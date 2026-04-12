@@ -1,9 +1,14 @@
 const express = require('express');
 const Material = require('../models/Material');
+const {
+  syncMaterialDenormAfterRename,
+  syncMaterialUnitToContracts
+} = require('../utils/referenceSync');
 const User = require('../models/User');
 const NotificationPreferences = require('../models/NotificationPreferences');
 const { authenticateToken, requireActiveSite } = require('../middleware/auth');
 const { validate, z } = require('../middleware/validation');
+const { parsePageLimit } = require('../utils/pagination');
 
 const router = express.Router();
 
@@ -71,8 +76,15 @@ const notifyLowStockIfNeeded = async ({ material, prevQuantity, triggeredBy }) =
 router.get('/', authenticateToken, requireActiveSite, async (req, res) => {
   // Allow all users to see materials scoped to their company/site so they can use them in reports/receipts
   const query = { company: req.user.company, site: req.user.site };
-  const materials = await Material.find(query).sort({ createdAt: -1 });
-  return res.json({ materials });
+  const { page, limit, skip } = parsePageLimit(req.query, { defaultLimit: 500, maxLimit: 2000 });
+  const [materials, total] = await Promise.all([
+    Material.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+    Material.countDocuments(query)
+  ]);
+  return res.json({
+    materials,
+    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 0 }
+  });
 });
 
 router.post('/', authenticateToken, requireActiveSite, validate(materialCreateSchema), async (req, res) => {
@@ -163,9 +175,29 @@ router.put(
   if (!existing) {
     return res.status(404).json({ message: 'Material not found' });
   }
+  const prevName = existing.name;
+  const prevUnit = existing.unit;
   const material = await Material.findOneAndUpdate(filter, updates, { new: true });
   if (!material) {
     return res.status(404).json({ message: 'Material not found' });
+  }
+  // Propagate renames even if the client omitted `name` in the body but the row still changed.
+  if (prevName !== material.name) {
+    await syncMaterialDenormAfterRename({
+      company: req.user.company,
+      site: req.user.site,
+      materialId: material._id,
+      oldName: prevName,
+      newName: material.name
+    });
+  }
+  if (unit !== undefined && prevUnit !== material.unit) {
+    await syncMaterialUnitToContracts({
+      company: req.user.company,
+      site: req.user.site,
+      materialId: material._id,
+      newUnit: material.unit
+    });
   }
   await notifyLowStockIfNeeded({
     material,

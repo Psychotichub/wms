@@ -32,13 +32,18 @@ router.get('/', authenticateToken, requireActiveSite, async (req, res, next) => 
     const inventoryItems = await Promise.all(
       receivedMaterials.map(async ({ _id: materialName, totalReceived }) => {
         // Calculate total consumption from daily reports
+        const material = materialMap.get(materialName.toLowerCase());
+        const consumptionMatch = {
+          company,
+          site,
+          $or: [{ materialName }]
+        };
+        if (material?._id) {
+          consumptionMatch.$or.push({ materialId: material._id });
+        }
         const consumptionResult = await DailyReport.aggregate([
           {
-            $match: {
-              company,
-              site,
-              materialName
-            }
+            $match: consumptionMatch
           },
           {
             $group: {
@@ -59,7 +64,6 @@ router.get('/', authenticateToken, requireActiveSite, async (req, res, next) => 
           status = 'Finished';
         }
 
-        const material = materialMap.get(materialName.toLowerCase());
         const unit = material?.unit || 'pcs';
 
         return {
@@ -73,8 +77,22 @@ router.get('/', authenticateToken, requireActiveSite, async (req, res, next) => 
       })
     );
 
+    const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
+    let limit = parseInt(String(req.query.limit ?? '500'), 10);
+    if (!Number.isFinite(limit) || limit < 1) limit = 500;
+    limit = Math.min(2000, limit);
+    const total = inventoryItems.length;
+    const start = (page - 1) * limit;
+    const slice = inventoryItems.slice(start, start + limit);
+
     res.json({
-      inventory: inventoryItems,
+      inventory: slice,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 0
+      },
       success: true
     });
   } catch (err) {
