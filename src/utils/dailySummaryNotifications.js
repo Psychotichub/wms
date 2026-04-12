@@ -27,7 +27,6 @@ async function sendDailySummaries() {
       .lean();
 
     if (employees.length === 0) {
-      console.log('No employees with user accounts found');
       return { checked: 0, notified: 0 };
     }
 
@@ -115,9 +114,6 @@ async function sendDailySummaries() {
       totalNotified++;
     }
 
-    if (totalNotified > 0) {
-      console.log(`Daily summary notifications sent: ${totalChecked} users checked, ${totalNotified} summaries sent`);
-    }
     return { checked: totalChecked, notified: totalNotified };
   } catch (error) {
     console.error('Error sending daily summaries:', error);

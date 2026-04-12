@@ -16,7 +16,6 @@ async function checkAndNotifyExceededContracts() {
       .lean();
 
     if (contracts.length === 0) {
-      console.log('No active contracts found');
       return { checked: 0, notified: 0 };
     }
 
@@ -121,7 +120,6 @@ async function checkAndNotifyExceededContracts() {
       }
     }
 
-    console.log(`Contract exceed check completed: ${totalChecked} contracts checked, ${totalNotified} notifications sent`);
     return { checked: totalChecked, notified: totalNotified };
   } catch (error) {
     console.error('Error checking exceeded contracts:', error);

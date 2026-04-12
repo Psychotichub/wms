@@ -13,7 +13,6 @@ async function checkAndNotifyExceededInventory() {
     // Get all companies and sites
     const companies = await Received.distinct('company');
     if (companies.length === 0) {
-      console.log('No received records found');
       return { checked: 0, notified: 0 };
     }
 
@@ -119,7 +118,6 @@ async function checkAndNotifyExceededInventory() {
       }
     }
 
-    console.log(`Inventory exceed check completed: ${totalChecked} materials checked, ${totalNotified} notifications sent`);
     return { checked: totalChecked, notified: totalNotified };
   } catch (error) {
     console.error('Error checking exceeded inventory:', error);

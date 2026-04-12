@@ -141,7 +141,6 @@ This verification link and code will expire in ${expiryText}. If you didn't crea
       html: htmlContent
     });
 
-    console.log('✅ Verification email sent:', info.messageId);
     return info;
   } catch (error) {
     console.error('❌ Error sending verification email:', error);
@@ -243,7 +242,6 @@ This verification link and code will expire in ${expiryText}.
       html: htmlContent
     });
 
-    console.log('✅ Resend verification email sent:', info.messageId);
     return info;
   } catch (error) {
     console.error('❌ Error sending resend verification email:', error);

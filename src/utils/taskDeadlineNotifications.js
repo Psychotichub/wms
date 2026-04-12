@@ -22,7 +22,6 @@ async function checkAndNotifyApproachingDeadlines() {
       .lean();
 
     if (tasks.length === 0) {
-      console.log('No tasks with deadlines found');
       return { checked: 0, notified: 0 };
     }
 
@@ -106,7 +105,6 @@ async function checkAndNotifyApproachingDeadlines() {
       }
     }
 
-    console.log(`Deadline approaching check completed: ${totalChecked} tasks checked, ${totalNotified} notifications sent`);
     return { checked: totalChecked, notified: totalNotified };
   } catch (error) {
     console.error('Error checking approaching deadlines:', error);
@@ -133,7 +131,6 @@ async function checkAndNotifyOverdueDeadlines() {
       .lean();
 
     if (tasks.length === 0) {
-      console.log('No overdue tasks found');
       return { checked: 0, notified: 0 };
     }
 
@@ -207,7 +204,6 @@ async function checkAndNotifyOverdueDeadlines() {
       totalNotified++;
     }
 
-    console.log(`Deadline overdue check completed: ${totalChecked} tasks checked, ${totalNotified} notifications sent`);
     return { checked: totalChecked, notified: totalNotified };
   } catch (error) {
     console.error('Error checking overdue deadlines:', error);

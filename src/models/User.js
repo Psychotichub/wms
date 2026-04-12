@@ -72,7 +72,6 @@ const User = mongoose.model('User', UserSchema);
     );
     if (phoneNumberIndex) {
       await User.collection.dropIndex(phoneNumberIndex.name);
-      console.log('Dropped obsolete phoneNumber index from users collection');
     }
   } catch (err) {
     // Ignore if collection not ready, index missing, or already dropped

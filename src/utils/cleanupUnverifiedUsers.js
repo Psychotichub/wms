@@ -49,8 +49,6 @@ async function cleanupUnverifiedUsers() {
       _id: { $in: userIds }
     });
 
-    console.log(`[Cleanup] Deleted ${deleteResult.deletedCount} unverified users:`, userEmails);
-
     return {
       checked: expiredUsers.length,
       deleted: deleteResult.deletedCount,
