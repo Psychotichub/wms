@@ -140,13 +140,19 @@ const buildVerificationUrl = (token) => {
 };
 
 router.post('/signup', validate(signupSchema), async (req, res, next) => {
+  const { name, email, password, company, site, adminCode } = req.data; // use validated data
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const resolvedSite = site ? String(site).trim() : '';
+  const configuredAdminCode = process.env.ADMIN_SIGNUP_CODE;
+  const isAdminMatch =
+    configuredAdminCode && adminCode && safeEqual(adminCode, configuredAdminCode);
+  const role = isAdminMatch ? 'admin' : 'user';
+  let finalSite = resolvedSite || null;
+  let finalSites = resolvedSite ? [resolvedSite] : [];
   try {
-    const { name, email, password, company, site, adminCode } = req.data; // use validated data
-    const normalizedEmail = String(email || '').trim().toLowerCase();
     if (!company) {
       return res.status(400).json({ message: 'Company is required' });
     }
-    const resolvedSite = site ? String(site).trim() : '';
     
     // Check database connection
     if (mongoose.connection.readyState !== 1) {
@@ -159,15 +165,7 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
     }
     // Admin signup is only allowed when explicitly enabled via env code.
     // In production, keep ADMIN_SIGNUP_CODE unset to prevent public admin creation.
-    const configuredAdminCode = process.env.ADMIN_SIGNUP_CODE;
-    const isAdminMatch =
-      configuredAdminCode && adminCode && safeEqual(adminCode, configuredAdminCode);
-    const role = isAdminMatch ? 'admin' : 'user';
-
     // Check if company or site already has an admin - if so, ignore site assignment for new admin
-    let finalSite = resolvedSite || null;
-    let finalSites = resolvedSite ? [resolvedSite] : [];
-    
     if (isAdminMatch) {
       // Check if company already has an admin (regardless of site)
       const existingCompanyAdmin = await User.findOne({ 
@@ -268,7 +266,6 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
         // Retry once after a brief delay to allow migration to complete
         await new Promise(resolve => setTimeout(resolve, 1000));
         try {
-          const resolvedSite = site ? String(site).trim() : '';
           // Generate email verification token and code
           const expiryHours = parseFloat(process.env.VERIFICATION_EXPIRY_HOURS || '0.25');
           const expiryTime = expiryHours * 60 * 60 * 1000;
@@ -284,8 +281,8 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
             password,
             role,
             company,
-            site: resolvedSite || null,
-            sites: resolvedSite ? [resolvedSite] : [],
+            site: finalSite,
+            sites: finalSites,
             isEmailVerified: false,
             emailVerificationToken: verificationToken,
             emailVerificationTokenExpiry: verificationTokenExpiry,
