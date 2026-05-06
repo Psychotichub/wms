@@ -85,6 +85,7 @@ const searchRoutes = require('./routes/search');
 const auditRoutes = require('./routes/audit');
 const exportRoutes = require('./routes/export');
 const privacyRoutes = require('./routes/privacy');
+const privacyPolicyRoutes = require('./routes/privacyPolicy');
 
 const app = express();
 const port = process.env.PORT || 4000;
@@ -264,6 +265,7 @@ app.use('/api/search', searchRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/privacy', privacyRoutes);
+app.use('/privacy-policy', privacyPolicyRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/materials', materialRoutes);
 app.use('/api/received', receivedRoutes);
