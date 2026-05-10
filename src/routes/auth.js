@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const { authenticateToken } = require('../middleware/auth');
 const { createAccessToken } = require('../utils/tokens');
-const { sendVerificationEmail, sendResendVerificationEmail } = require('../utils/email');
+const { isEmailConfigured, sendVerificationEmail, sendResendVerificationEmail } = require('../utils/email');
 
 const { validateDeviceBinding } = require('./devices');
 const { validate, z } = require('../middleware/validation');
@@ -595,6 +595,14 @@ router.post('/resend-verification', validate(resendVerificationSchema), async (r
     if (user.isEmailVerified) {
       return res.json({ 
         message: 'Email is already verified' 
+      });
+    }
+
+    if (!isEmailConfigured()) {
+      return res.status(503).json({
+        code: 'EMAIL_NOT_CONFIGURED',
+        message:
+          'Email delivery is not configured. Set EMAIL_HOST, EMAIL_USER, and EMAIL_PASSWORD on the server.'
       });
     }
     

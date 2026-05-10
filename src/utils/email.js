@@ -1,35 +1,40 @@
 const nodemailer = require('nodemailer');
 
+function isEmailConfigured() {
+  const host = process.env.EMAIL_HOST;
+  const user = process.env.EMAIL_USER;
+  const pass = process.env.EMAIL_PASSWORD;
+  return Boolean(host && user && pass);
+}
+
 /**
  * Configure and create a nodemailer transporter for sending emails
  * Supports SMTP configuration via environment variables
  */
 function createTransporter() {
-  // Check if email is configured
   const emailHost = process.env.EMAIL_HOST;
-  const emailPort = process.env.EMAIL_PORT;
   const emailUser = process.env.EMAIL_USER;
   const emailPassword = process.env.EMAIL_PASSWORD;
 
-  if (!emailHost || !emailUser || !emailPassword) {
+  if (!isEmailConfigured()) {
     console.warn('⚠️  Email configuration missing. Email verification will not work.');
     console.warn('   Set EMAIL_HOST, EMAIL_USER, and EMAIL_PASSWORD in .env');
     return null;
   }
 
-  // Create transporter with SMTP configuration
+  const port = parseInt(process.env.EMAIL_PORT || '587', 10);
+  const tlsInsecure = process.env.EMAIL_TLS_INSECURE === 'true';
+
   const transporter = nodemailer.createTransport({
     host: emailHost,
-    port: parseInt(emailPort || '587', 10),
-    secure: emailPort === '465', // true for 465, false for other ports
+    port,
+    secure: port === 465,
     auth: {
       user: emailUser,
       pass: emailPassword
     },
-    // For development/testing with services like Gmail
-    // You may need to enable "Less secure app access" or use App Passwords
     tls: {
-      rejectUnauthorized: false // Set to true in production with valid certificates
+      rejectUnauthorized: !tlsInsecure
     }
   });
 
@@ -250,6 +255,7 @@ This verification link and code will expire in ${expiryText}.
 }
 
 module.exports = {
+  isEmailConfigured,
   sendVerificationEmail,
   sendResendVerificationEmail,
   createTransporter

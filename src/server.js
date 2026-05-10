@@ -53,6 +53,13 @@ if (process.env.SENTRY_DSN) {
   logger.info('Sentry initialised');
 }
 
+const { isEmailConfigured } = require('./utils/email');
+if (!isEmailConfigured()) {
+  logger.warn('Nodemailer: EMAIL_HOST / EMAIL_USER / EMAIL_PASSWORD not set — verification emails will not send');
+} else {
+  logger.info('Nodemailer: SMTP credentials present');
+}
+
 // IMPORTANT: require routes only AFTER env is loaded, because some routes read secrets at module load.
 const authRoutes = require('./routes/auth');
 const reportRoutes = require('./routes/reports');
