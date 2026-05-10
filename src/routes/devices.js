@@ -20,7 +20,7 @@ const updateDeviceSchema = z.object({
 
 // Get user's bound devices
 router.get('/', authenticateToken, async (req, res) => {
-  const user = await User.findById(req.user.userId).select('boundDevices requireDeviceBinding maxBoundDevices');
+  const user = await User.findById(req.user.id).select('boundDevices requireDeviceBinding maxBoundDevices');
 
   if (!user) {
     return res.status(404).json({ error: 'User not found', success: false });
@@ -45,7 +45,7 @@ router.post('/bind', authenticateToken, validate(bindDeviceSchema), async (req, 
     });
   }
 
-  const user = await User.findById(req.user.userId);
+  const user = await User.findById(req.user.id);
 
   if (!user) {
     return res.status(404).json({ error: 'User not found', success: false });
@@ -100,7 +100,7 @@ router.post(
   authenticateToken,
   validate(deviceIdParamsSchema, { source: 'params' }),
   async (req, res) => {
-  const user = await User.findById(req.user.userId);
+  const user = await User.findById(req.user.id);
 
   if (!user) {
     return res.status(404).json({ error: 'User not found', success: false });
@@ -131,7 +131,7 @@ router.put(
   async (req, res) => {
   const { deviceName } = req.data;
 
-  const user = await User.findById(req.user.userId);
+  const user = await User.findById(req.user.id);
 
   if (!user) {
     return res.status(404).json({ error: 'User not found', success: false });
