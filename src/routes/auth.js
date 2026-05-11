@@ -222,9 +222,9 @@ router.post('/signup', validate(signupSchema), async (req, res, next) => {
         verificationUrl: verificationUrl,
         verificationCode: verificationCode
       });
-      logger.info({ email: normalizedEmail }, '✅ Verification email sent successfully on signup');
+      console.log('✅ Verification email sent successfully on signup', { email: normalizedEmail });
     } catch (emailError) {
-      logger.error({ err: emailError, email: normalizedEmail }, '❌ Failed to send verification email on signup');
+      console.error('❌ Failed to send verification email on signup', { err: emailError, email: normalizedEmail });
       // Don't fail signup if email fails - user can request resend later
     }
     
@@ -634,12 +634,12 @@ router.post('/resend-verification', validate(resendVerificationSchema), async (r
         verificationUrl: verificationUrl,
         verificationCode: verificationCode
       });
-      logger.info({ email: normalizedEmail }, '✅ Resend verification email sent successfully');
+      console.log('✅ Resend verification email sent successfully', { email: normalizedEmail });
       return res.json({ 
         message: 'Verification email sent successfully' 
       });
     } catch (emailError) {
-      logger.error({ err: emailError, email: normalizedEmail }, '❌ Failed to resend verification email');
+      console.error('❌ Failed to resend verification email', { err: emailError, email: normalizedEmail });
       return res.status(500).json({ 
         message: 'Failed to send verification email. Please try again later.' 
       });
