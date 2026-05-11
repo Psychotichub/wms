@@ -1,6 +1,10 @@
+const { Resend } = require('resend');
 const nodemailer = require('nodemailer');
 
 function isEmailConfigured() {
+  // Resend API key takes priority (required on Render — SMTP is blocked)
+  if (process.env.RESEND_API_KEY) return true;
+  // Fallback: nodemailer for local development
   const host = process.env.EMAIL_HOST;
   const user = process.env.EMAIL_USER;
   const pass = process.env.EMAIL_PASSWORD;
@@ -8,44 +12,47 @@ function isEmailConfigured() {
 }
 
 /**
- * Configure and create a nodemailer transporter for sending emails
- * Supports SMTP configuration via environment variables
+ * Unified email sender.
+ * - Uses Resend HTTP API when RESEND_API_KEY is set (production / Render).
+ * - Falls back to nodemailer SMTP for local development.
  */
-function createTransporter() {
+async function sendEmail({ from, to, subject, html, text }) {
+  if (process.env.RESEND_API_KEY) {
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    const { data, error } = await resend.emails.send({ from, to, subject, html, text });
+    if (error) {
+      throw new Error(`Resend error: ${error.message || JSON.stringify(error)}`);
+    }
+    return { messageId: data?.id };
+  }
+
+  // ── Nodemailer fallback (local dev) ─────────────────────────────────────────
   const emailHost = process.env.EMAIL_HOST;
   const emailUser = process.env.EMAIL_USER;
   const emailPassword = process.env.EMAIL_PASSWORD;
 
-  if (!isEmailConfigured()) {
-    console.warn('⚠️  Email configuration missing. Email verification will not work.');
-    console.warn('   Set EMAIL_HOST, EMAIL_USER, and EMAIL_PASSWORD in .env');
-    return null;
+  if (!emailHost || !emailUser || !emailPassword) {
+    throw new Error('Email service not configured. Set RESEND_API_KEY (production) or EMAIL_HOST/USER/PASSWORD (local dev).');
   }
 
-  // Default to port 465 (SSL) — Render free tier blocks outbound 587 (STARTTLS).
-  // Set EMAIL_PORT=587 in your env only if you know your host allows it.
   const port = parseInt(process.env.EMAIL_PORT || '465', 10);
   const tlsInsecure = process.env.EMAIL_TLS_INSECURE === 'true';
 
   const transporter = nodemailer.createTransport({
     host: emailHost,
     port,
-    secure: port === 465, // true = SSL (465), false = STARTTLS (587)
-    auth: {
-      user: emailUser,
-      pass: emailPassword
-    },
-    tls: {
-      rejectUnauthorized: !tlsInsecure
-    },
-    // Fail fast so the signup request does not hang for minutes on a bad SMTP host
-    connectionTimeout: 10000,  // 10 s to establish TCP connection
-    greetingTimeout: 10000,    // 10 s to receive SMTP greeting
-    socketTimeout: 15000       // 15 s of inactivity before giving up
+    secure: port === 465,
+    auth: { user: emailUser, pass: emailPassword },
+    tls: { rejectUnauthorized: !tlsInsecure },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000
   });
 
-  return transporter;
+  const info = await transporter.sendMail({ from, to, subject, html, text });
+  return info;
 }
+
 
 /**
  * Send email verification email to user
@@ -58,9 +65,8 @@ function createTransporter() {
  * @returns {Promise<Object>} - Result from nodemailer
  */
 async function sendVerificationEmail({ email, name, verificationToken, verificationUrl, verificationCode }) {
-  const transporter = createTransporter();
-  if (!transporter) {
-    throw new Error('Email service not configured. Please set EMAIL_HOST, EMAIL_USER, and EMAIL_PASSWORD in .env');
+  if (!isEmailConfigured()) {
+    throw new Error('Email service not configured. Set RESEND_API_KEY (production) or EMAIL_HOST/USER/PASSWORD (local dev).');
   }
 
   const appName = process.env.APP_NAME || 'WMS';
@@ -144,15 +150,13 @@ This verification link and code will expire in ${expiryText}. If you didn't crea
   `;
 
   try {
-    const info = await transporter.sendMail({
+    return await sendEmail({
       from: `"${appName}" <${fromEmail}>`,
       to: email,
-      subject: subject,
+      subject,
       text: textContent,
       html: htmlContent
     });
-
-    return info;
   } catch (error) {
     console.error('❌ Error sending verification email:', error);
     throw error;
@@ -170,9 +174,8 @@ This verification link and code will expire in ${expiryText}. If you didn't crea
  * @returns {Promise<Object>} - Result from nodemailer
  */
 async function sendResendVerificationEmail({ email, name, verificationToken, verificationUrl, verificationCode }) {
-  const transporter = createTransporter();
-  if (!transporter) {
-    throw new Error('Email service not configured. Please set EMAIL_HOST, EMAIL_USER, and EMAIL_PASSWORD in .env');
+  if (!isEmailConfigured()) {
+    throw new Error('Email service not configured. Set RESEND_API_KEY (production) or EMAIL_HOST/USER/PASSWORD (local dev).');
   }
 
   const appName = process.env.APP_NAME || 'WMS';
@@ -245,15 +248,13 @@ This verification link and code will expire in ${expiryText}.
   `;
 
   try {
-    const info = await transporter.sendMail({
+    return await sendEmail({
       from: `"${appName}" <${fromEmail}>`,
       to: email,
-      subject: subject,
+      subject,
       text: textContent,
       html: htmlContent
     });
-
-    return info;
   } catch (error) {
     console.error('❌ Error sending resend verification email:', error);
     throw error;
@@ -262,7 +263,7 @@ This verification link and code will expire in ${expiryText}.
 
 module.exports = {
   isEmailConfigured,
+  sendEmail,
   sendVerificationEmail,
-  sendResendVerificationEmail,
-  createTransporter
+  sendResendVerificationEmail
 };
