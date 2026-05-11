@@ -2,7 +2,8 @@ const { Resend } = require('resend');
 const nodemailer = require('nodemailer');
 
 function isEmailConfigured() {
-  // Resend API key takes priority (required on Render — SMTP is blocked)
+  // Priority: Brevo > Resend > nodemailer
+  if (process.env.BREVO_API_KEY) return true;
   if (process.env.RESEND_API_KEY) return true;
   // Fallback: nodemailer for local development
   const host = process.env.EMAIL_HOST;
@@ -12,11 +13,44 @@ function isEmailConfigured() {
 }
 
 /**
- * Unified email sender.
- * - Uses Resend HTTP API when RESEND_API_KEY is set (production / Render).
- * - Falls back to nodemailer SMTP for local development.
+ * Unified email sender. Priority order:
+ *  1. Brevo HTTP API  — no domain needed, verify Gmail as sender (recommended for Render)
+ *  2. Resend HTTP API — requires verified domain for non-account recipients
+ *  3. Nodemailer SMTP — local dev only (Render blocks all SMTP ports)
  */
 async function sendEmail({ from, to, subject, html, text }) {
+  // ── 1. Brevo (HTTPS REST — never blocked by Render, no domain needed) ────────
+  if (process.env.BREVO_API_KEY) {
+    const fromMatch = (from || '').match(/^"?([^"<]*)"?\s*<([^>]+)>$/);
+    const senderName  = fromMatch ? fromMatch[1].trim() : 'WMS';
+    const senderEmail = fromMatch ? fromMatch[2].trim() : from;
+
+    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        sender:      { name: senderName, email: senderEmail },
+        to:          [{ email: to }],
+        subject,
+        htmlContent: html,
+        textContent: text
+      })
+    });
+
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(`Brevo error (${res.status}): ${errBody.message || JSON.stringify(errBody)}`);
+    }
+
+    const data = await res.json();
+    return { messageId: data.messageId };
+  }
+
+  // ── 2. Resend (requires verified domain for non-account recipients) ──────────
   if (process.env.RESEND_API_KEY) {
     const resend = new Resend(process.env.RESEND_API_KEY);
     const { data, error } = await resend.emails.send({ from, to, subject, html, text });
@@ -26,13 +60,13 @@ async function sendEmail({ from, to, subject, html, text }) {
     return { messageId: data?.id };
   }
 
-  // ── Nodemailer fallback (local dev) ─────────────────────────────────────────
+  // ── 3. Nodemailer fallback (local dev) ───────────────────────────────────────
   const emailHost = process.env.EMAIL_HOST;
   const emailUser = process.env.EMAIL_USER;
   const emailPassword = process.env.EMAIL_PASSWORD;
 
   if (!emailHost || !emailUser || !emailPassword) {
-    throw new Error('Email service not configured. Set RESEND_API_KEY (production) or EMAIL_HOST/USER/PASSWORD (local dev).');
+    throw new Error('Email service not configured. Set BREVO_API_KEY (production) or EMAIL_HOST/USER/PASSWORD (local dev).');
   }
 
   const port = parseInt(process.env.EMAIL_PORT || '465', 10);
