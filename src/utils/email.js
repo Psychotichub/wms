@@ -22,20 +22,26 @@ function createTransporter() {
     return null;
   }
 
-  const port = parseInt(process.env.EMAIL_PORT || '587', 10);
+  // Default to port 465 (SSL) — Render free tier blocks outbound 587 (STARTTLS).
+  // Set EMAIL_PORT=587 in your env only if you know your host allows it.
+  const port = parseInt(process.env.EMAIL_PORT || '465', 10);
   const tlsInsecure = process.env.EMAIL_TLS_INSECURE === 'true';
 
   const transporter = nodemailer.createTransport({
     host: emailHost,
     port,
-    secure: port === 465,
+    secure: port === 465, // true = SSL (465), false = STARTTLS (587)
     auth: {
       user: emailUser,
       pass: emailPassword
     },
     tls: {
       rejectUnauthorized: !tlsInsecure
-    }
+    },
+    // Fail fast so the signup request does not hang for minutes on a bad SMTP host
+    connectionTimeout: 10000,  // 10 s to establish TCP connection
+    greetingTimeout: 10000,    // 10 s to receive SMTP greeting
+    socketTimeout: 15000       // 15 s of inactivity before giving up
   });
 
   return transporter;
