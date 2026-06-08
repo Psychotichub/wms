@@ -78,6 +78,7 @@ const contractRoutes = require('./routes/contracts');
 const inventoryRoutes = require('./routes/inventory');
 const taskRoutes = require('./routes/tasks');
 const isolationTestRoutes = require('./routes/isolationTests');
+const requisitionRoutes = require('./routes/requisitions');
 let todoRoutes;
 try {
   todoRoutes = require('./routes/todos');
@@ -290,6 +291,7 @@ app.use('/api/inventory', inventoryRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/todos', todoRoutes);
 app.use('/api/isolation-tests', isolationTestRoutes);
+app.use('/api/requisitions', requisitionRoutes);
 
 // ── Global error handler ────────────────────────────────────────────────────
 
